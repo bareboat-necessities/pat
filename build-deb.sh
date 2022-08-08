@@ -16,5 +16,5 @@ apt-get -y install devscripts debhelper-compat build-essential lintian \
 
 ./make.bash libax25
 
-dpkg-buildpackage -uc -us -j8
+dpkg-buildpackage -b -uc -us -j8
 
