@@ -6,10 +6,6 @@ PKGDIR=debian/tmp
 %:
 	dh $@ --sourcedirectory=$(PKGDIR)
 
-clean:
-	dh_clean
-	rm -rf $(PKGDIR)
-
 build:
 	./make.bash
 
