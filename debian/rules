@@ -4,7 +4,7 @@
 PKGDIR=debian/tmp
 
 %:
-	dh $@
+	dh $@ --sourcedirectory=$(PKGDIR)
 
 clean:
 	dh_clean
