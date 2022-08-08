@@ -20,7 +20,7 @@ build:
 	cp -r share/* $(PKGDIR)/usr/share/pat/
 	cp debian/pat@.service $(PKGDIR)/lib/systemd/system/
 
-binary-arch: clean build
+binary-arch: build
 	dh_prep
 	dh_installdirs
 
