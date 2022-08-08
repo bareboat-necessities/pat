@@ -1,0 +1,71 @@
+---
+version: 2.1
+orbs:
+  cloudsmith: cloudsmith/cloudsmith@1.0.4
+executors:
+  boot-linux:
+    machine:
+      resource_class: large
+      enabled: true
+      image: ubuntu-2004:202104-01
+  boot-linux-arm:
+    machine:
+      resource_class: arm.large
+      enabled: true
+      image: ubuntu-2004:202104-01
+commands:
+  git-checkout:
+    steps:
+      - checkout
+  build-n-publish-debian:
+    steps:
+      - run: sudo apt-get -y install debhelper-compat
+      - run: chmod a+x .circleci/*.sh
+      - run:
+          command: |
+            .circleci/build-debian.sh
+          no_output_timeout: 30m
+      - cloudsmith/ensure-api-key
+      - cloudsmith/install-cli
+      - run: .circleci/publish-cloudsmith.sh deb bbn-projects/bbn-deb-repo ${PKG_DISTRO}/${PKG_RELEASE}
+  do-all:
+    steps:
+      - git-checkout
+      - build-n-publish-debian
+jobs:
+  build-debian-bullseye-arm64:
+    executor: boot-linux-arm
+    environment:
+      - DOCKER_IMAGE=arm64v8/debian:bullseye
+      - CONTAINER_DISTRO=debian:bullseye
+      - PKG_RELEASE=bullseye
+      - PKG_DISTRO=debian
+      - EMU=off
+    steps:
+      - do-all
+  build-debian-bullseye-arm32:
+    executor: boot-linux-arm
+    environment:
+      - DOCKER_IMAGE=arm32v7/debian:bullseye
+      - CONTAINER_DISTRO=debian:bullseye
+      - PKG_RELEASE=bullseye
+      - PKG_DISTRO=debian
+      - EMU=off
+    steps:
+      - do-all
+  build-debian-bullseye-amd64:
+    executor: boot-linux
+    environment:
+      - DOCKER_IMAGE=amd64/debian:bullseye
+      - CONTAINER_DISTRO=debian:bullseye
+      - PKG_RELEASE=bullseye
+      - PKG_DISTRO=debian
+    steps:
+      - do-all
+workflows:
+  version: 2
+  build_all:
+    jobs:
+      - build-debian-bullseye-arm64
+      - build-debian-bullseye-arm32
+      - build-debian-bullseye-amd64
