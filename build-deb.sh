@@ -8,7 +8,7 @@ apt-get update  -y -q
 apt-get install -y -q wget xz-utils gnupg ca-certificates
 apt-get upgrade -y -q
 
-apt-get -y install devscripts debhelper-compat build-essential lintian \
+apt-get -y install devscripts debhelper build-essential lintian \
   golang/bullseye-backports golang-go/bullseye-backports \
   golang-doc/bullseye-backports golang-src/bullseye-backports \
   libax25 libax25-dev
