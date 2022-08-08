@@ -31,7 +31,7 @@ docker exec --privileged -ti $DOCKER_CONTAINER_ID apt-get -y install dpkg-dev de
 docker exec --privileged -ti $DOCKER_CONTAINER_ID apt-get -y install dh-exec autotools-dev autoconf gzip
 
 docker exec --privileged -ti $DOCKER_CONTAINER_ID /bin/bash -xec \
-    "update-alternatives --set fakeroot /usr/bin/fakeroot-tcp; cd ci-source; chmod +x ./*.sh; ./build-deb.sh $CONTAINER_DISTRO; mkdir dist; mv *.deb dist; chmod -R a+rw dist"
+    "update-alternatives --set fakeroot /usr/bin/fakeroot-tcp; cd ci-source; chmod +x ./*.sh; ./build-deb.sh $CONTAINER_DISTRO; mkdir dist; mv ../*.deb dist; chmod -R a+rw dist"
 
 find dist -name \*.\*$EXT
 
