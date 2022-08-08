@@ -17,5 +17,5 @@ apt-get -y install devscripts/bullseye-backports debhelper-compat \
 
 ./make.bash libax25
 
-dpkg-buildpackage -b -uc -us -j8 --sourcedir=debian/tmp
+dpkg-buildpackage -b -uc -us -j8
 
