@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
 
-PKGDIR=debian/tmp
+PKGDIR=debian/pat
 
 %:
 	dh $@ --sourcedirectory=$(PKGDIR)
