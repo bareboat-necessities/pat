@@ -6,6 +6,9 @@ PKGDIR=debian/pat
 %:
 	dh $@ --sourcedirectory=$(PKGDIR)
 
+override_dh_auto_install:
+	$(MAKE) DESTDIR=$$(pwd)/$(PKGDIR) prefix=/ install
+
 build:
 	./make.bash
 
