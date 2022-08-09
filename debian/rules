@@ -8,12 +8,6 @@ PKGDIR=debian/pat
 
 build:
 	./make.bash
-	mkdir -p $(PKGDIR)/usr/bin
-	mkdir -p $(PKGDIR)/usr/share/pat
-	mkdir -p $(PKGDIR)/lib/systemd/system
-	mv ./pat $(PKGDIR)/usr/bin/
-	cp -r share/* $(PKGDIR)/usr/share/pat/
-	cp debian/pat@.service $(PKGDIR)/lib/systemd/system/
 
 binary-arch: build
 	dh_prep
