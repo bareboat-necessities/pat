@@ -1,0 +1,3 @@
+debian/pat/pat             usr/bin/
+debian/pat/share/*         usr/share/pat/
+debian/pat@.service        lib/systemd/system/
