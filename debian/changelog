@@ -1,4 +1,4 @@
-pat (0.12.1) stable; urgency=medium
+pat (0.12.1-1) stable; urgency=medium
 
   * Add support for configurable telnet dial timeout (for Iridium GO users)
   * Add support for scriptable message composition
