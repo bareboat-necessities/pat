@@ -10,6 +10,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path"
@@ -30,10 +32,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/dimchansky/utfbom"
+	"github.com/la5nta/pat/cfg"
+	"github.com/la5nta/pat/internal/debug"
+	"github.com/la5nta/pat/internal/gpsd"
+	"github.com/pd0mz/go-maidenhead"
 )
 
 const (
 	fieldValueFalseInXML = "False"
+	htmlFileExt          = ".html"
 	txtFileExt           = ".txt"
 	formsVersionInfoURL  = "https://api.getpat.io/v1/forms/standard-templates/latest"
 )
@@ -59,6 +66,7 @@ type Config struct {
 	AppVersion string
 	LineReader func() string
 	UserAgent  string
+	GPSd       cfg.GPSdConfig
 }
 
 // Form holds information about a Winlink form template
@@ -86,6 +94,8 @@ type FormFolder struct {
 type FormData struct {
 	TargetForm Form              `json:"target_form"`
 	Fields     map[string]string `json:"fields"`
+	MsgTo      string            `json:"msg_to"`
+	MsgCc      string            `json:"msg_cc"`
 	MsgSubject string            `json:"msg_subject"`
 	MsgBody    string            `json:"msg_body"`
 	MsgXML     string            `json:"msg_xml"`
@@ -95,6 +105,8 @@ type FormData struct {
 
 // MessageForm represents a concrete form-based message
 type MessageForm struct {
+	To             string
+	Cc             string
 	Subject        string
 	Body           string
 	AttachmentXML  string
@@ -187,6 +199,8 @@ func (m *Manager) PostFormDataHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		log.Printf("%s %s: %s", r.Method, r.URL.Path, err)
 	}
+	formData.MsgTo = formMsg.To
+	formData.MsgCc = formMsg.Cc
 	formData.MsgSubject = formMsg.Subject
 	formData.MsgBody = formMsg.Body
 	formData.MsgXML = formMsg.AttachmentXML
@@ -214,9 +228,8 @@ func (m *Manager) GetFormDataHandler(w http.ResponseWriter, r *http.Request) {
 // GetPostedFormData is similar to GetFormDataHandler, but used when posting the form-based message to the outbox
 func (m *Manager) GetPostedFormData(key string) FormData {
 	m.postedFormData.RLock()
-	retVal := m.postedFormData.internalFormDataMap[key]
-	m.postedFormData.RUnlock()
-	return retVal
+	defer m.postedFormData.RUnlock()
+	return m.postedFormData.internalFormDataMap[key]
 }
 
 // GetFormTemplateHandler handles the request for viewing a form filled-in with instance values
@@ -251,8 +264,8 @@ func (m *Manager) GetFormTemplateHandler(w http.ResponseWriter, r *http.Request)
 }
 
 // UpdateFormTemplatesHandler handles API calls to update form templates.
-func (m *Manager) UpdateFormTemplatesHandler(w http.ResponseWriter, _ *http.Request) {
-	response, err := m.UpdateFormTemplates()
+func (m *Manager) UpdateFormTemplatesHandler(w http.ResponseWriter, r *http.Request) {
+	response, err := m.UpdateFormTemplates(r.Context())
 	if err != nil {
 		http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
 		return
@@ -262,14 +275,12 @@ func (m *Manager) UpdateFormTemplatesHandler(w http.ResponseWriter, _ *http.Requ
 }
 
 // UpdateFormTemplates handles searching for and installing the latest version of the form templates.
-func (m *Manager) UpdateFormTemplates() (UpdateResponse, error) {
-	if _, err := os.Stat(m.config.FormsPath); err != nil {
-		if err := os.MkdirAll(m.config.FormsPath, 0o755); err != nil {
-			return UpdateResponse{}, fmt.Errorf("can't write to forms dir [%w]", err)
-		}
+func (m *Manager) UpdateFormTemplates(ctx context.Context) (UpdateResponse, error) {
+	if err := os.MkdirAll(m.config.FormsPath, 0o755); err != nil {
+		return UpdateResponse{}, fmt.Errorf("can't write to forms dir [%w]", err)
 	}
 	log.Printf("Updating form templates; current version is %v", m.getFormsVersion())
-	latest, err := m.getLatestFormsInfo()
+	latest, err := m.getLatestFormsInfo(ctx)
 	if err != nil {
 		return UpdateResponse{}, err
 	}
@@ -281,8 +292,7 @@ func (m *Manager) UpdateFormTemplates() (UpdateResponse, error) {
 		}, nil
 	}
 
-	err = m.downloadAndUnzipForms(latest.ArchiveURL)
-	if err != nil {
+	if err = m.downloadAndUnzipForms(ctx, latest.ArchiveURL); err != nil {
 		return UpdateResponse{}, err
 	}
 	log.Printf("Finished forms update to %v", latest.Version)
@@ -298,8 +308,8 @@ type formsInfo struct {
 	ArchiveURL string `json:"archive_url"`
 }
 
-func (m *Manager) getLatestFormsInfo() (*formsInfo, error) {
-	resp, err := client.Get(m, formsVersionInfoURL)
+func (m *Manager) getLatestFormsInfo(ctx context.Context) (*formsInfo, error) {
+	resp, err := client.Get(ctx, m.config.UserAgent, formsVersionInfoURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("can't fetch winlink forms version page: %w", err)
 	}
@@ -312,9 +322,9 @@ func (m *Manager) getLatestFormsInfo() (*formsInfo, error) {
 	return &v, nil
 }
 
-func (m *Manager) downloadAndUnzipForms(downloadLink string) error {
+func (m *Manager) downloadAndUnzipForms(ctx context.Context, downloadLink string) error {
 	log.Printf("Updating forms via %v", downloadLink)
-	resp, err := client.Get(m, downloadLink)
+	resp, err := client.Get(ctx, m.config.UserAgent, downloadLink)
 	if err != nil {
 		return fmt.Errorf("can't download update ZIP: %w", err)
 	}
@@ -329,8 +339,7 @@ func (m *Manager) downloadAndUnzipForms(downloadLink string) error {
 		return fmt.Errorf("can't write update ZIP: %w", err)
 	}
 
-	unzipDir := m.config.FormsPath
-	if err := unzip(f.Name(), unzipDir); err != nil {
+	if err := unzip(f.Name(), m.config.FormsPath); err != nil {
 		return fmt.Errorf("can't unzip forms update: %w", err)
 	}
 	return nil
@@ -350,7 +359,7 @@ func unzip(srcArchivePath, dstRoot string) error {
 		}
 
 		// Ensure target directory exists
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 			return fmt.Errorf("can't create target directory: %w", err)
 		}
 
@@ -481,43 +490,36 @@ func (m *Manager) RenderForm(contentUnsanitized []byte, composeReply bool) (stri
 		return "", err
 	}
 
-	retVal, err := m.fillFormTemplate(absPathTemplate, "/api/form?composereply=true&formPath="+formRelPath, regexp.MustCompile(`{var\s+(\w+)\s*}`), formVars)
-	return retVal, err
+	return m.fillFormTemplate(absPathTemplate, "/api/form?composereply=true&formPath="+formRelPath, regexp.MustCompile(`{[vV][aA][rR]\s+(\w+)\s*}`), formVars)
 }
 
 // ComposeForm combines all data needed for the whole form-based message: subject, body, and attachment
 func (m *Manager) ComposeForm(tmplPath string, subject string) (MessageForm, error) {
 	formFolder, err := m.buildFormFolder()
 	if err != nil {
-		log.Printf("can't build form folder tree %s", err)
-		return MessageForm{}, err
+		return MessageForm{}, fmt.Errorf("failed to build form folder tree: %v", err)
 	}
 
 	tmplPath = filepath.Clean(tmplPath)
 	form, err := findFormFromURI(tmplPath, formFolder)
 	if err != nil {
-		log.Printf("can't find form to match form %s", tmplPath)
-		return MessageForm{}, err
+		return MessageForm{}, fmt.Errorf("failed to find '%s': %v", tmplPath, err)
 	}
 
-	varMap := map[string]string{
+	formValues := map[string]string{
 		"subjectline":     subject,
 		"templateversion": m.getFormsVersion(),
 		"msgsender":       m.config.MyCall,
 	}
-
-	fmt.Printf("Form '%s', version: %s", form.TxtFileURI, varMap["templateversion"])
-
+	fmt.Printf("Form '%s', version: %s", form.TxtFileURI, formValues["templateversion"])
 	formMsg, err := formMessageBuilder{
 		Template:    form,
-		FormValues:  varMap,
+		FormValues:  formValues,
 		Interactive: true,
 		IsReply:     false,
 		FormsMgr:    m,
 	}.build()
 	if err != nil {
-		err = fmt.Errorf("could not open form file: %w", err)
-		log.Print(err)
 		return MessageForm{}, err
 	}
 
@@ -526,15 +528,15 @@ func (m *Manager) ComposeForm(tmplPath string, subject string) (MessageForm, err
 
 func (f Form) matchesName(nameToMatch string) bool {
 	return f.InitialURI == nameToMatch ||
-		f.InitialURI == nameToMatch+".html" ||
+		strings.EqualFold(f.InitialURI, nameToMatch+htmlFileExt) ||
 		f.ViewerURI == nameToMatch ||
-		f.ViewerURI == nameToMatch+".html" ||
+		strings.EqualFold(f.ViewerURI, nameToMatch+htmlFileExt) ||
 		f.ReplyInitialURI == nameToMatch ||
 		f.ReplyInitialURI == nameToMatch+".0" ||
 		f.ReplyViewerURI == nameToMatch ||
 		f.ReplyViewerURI == nameToMatch+".0" ||
 		f.TxtFileURI == nameToMatch ||
-		f.TxtFileURI == nameToMatch+".txt"
+		strings.EqualFold(f.TxtFileURI, nameToMatch+txtFileExt)
 }
 
 func (f Form) containsName(partialName string) bool {
@@ -564,7 +566,7 @@ func (m *Manager) innerRecursiveBuildFormFolder(rootPath string) (FormFolder, er
 		return FormFolder{}, errors.New(rootPath + " is not a directory")
 	}
 
-	retVal := FormFolder{
+	folder := FormFolder{
 		Name:    rootFileInfo.Name(),
 		Path:    rootFile.Name(),
 		Forms:   []Form{},
@@ -573,7 +575,7 @@ func (m *Manager) innerRecursiveBuildFormFolder(rootPath string) (FormFolder, er
 
 	infos, err := rootFile.Readdir(0)
 	if err != nil {
-		return retVal, err
+		return folder, err
 	}
 	_ = rootFile.Close()
 
@@ -582,13 +584,13 @@ func (m *Manager) innerRecursiveBuildFormFolder(rootPath string) (FormFolder, er
 		if info.IsDir() {
 			subfolder, err := m.innerRecursiveBuildFormFolder(path.Join(rootPath, info.Name()))
 			if err != nil {
-				return retVal, err
+				return folder, err
 			}
-			retVal.Folders = append(retVal.Folders, subfolder)
-			retVal.FormCount += subfolder.FormCount
+			folder.Folders = append(folder.Folders, subfolder)
+			folder.FormCount += subfolder.FormCount
 			continue
 		}
-		if filepath.Ext(info.Name()) != txtFileExt {
+		if !strings.EqualFold(filepath.Ext(info.Name()), txtFileExt) {
 			continue
 		}
 		frm, err := m.buildFormFromTxt(path.Join(rootPath, info.Name()))
@@ -597,17 +599,17 @@ func (m *Manager) innerRecursiveBuildFormFolder(rootPath string) (FormFolder, er
 		}
 		if frm.InitialURI != "" || frm.ViewerURI != "" {
 			formCnt++
-			retVal.Forms = append(retVal.Forms, frm)
-			retVal.FormCount++
+			folder.Forms = append(folder.Forms, frm)
+			folder.FormCount++
 		}
 	}
-	sort.Slice(retVal.Folders, func(i, j int) bool {
-		return retVal.Folders[i].Name < retVal.Folders[j].Name
+	sort.Slice(folder.Folders, func(i, j int) bool {
+		return folder.Folders[i].Name < folder.Folders[j].Name
 	})
-	sort.Slice(retVal.Forms, func(i, j int) bool {
-		return retVal.Forms[i].Name < retVal.Forms[j].Name
+	sort.Slice(folder.Forms, func(i, j int) bool {
+		return folder.Forms[i].Name < folder.Forms[j].Name
 	})
-	return retVal, nil
+	return folder, nil
 }
 
 func (m *Manager) buildFormFromTxt(txtPath string) (Form, error) {
@@ -619,40 +621,41 @@ func (m *Manager) buildFormFromTxt(txtPath string) (Form, error) {
 
 	formsPathWithSlash := m.config.FormsPath + "/"
 
-	retVal := Form{
-		Name:       strings.TrimSuffix(path.Base(txtPath), ".txt"),
+	form := Form{
+		Name:       strings.TrimSuffix(path.Base(txtPath), path.Ext(txtPath)),
 		TxtFileURI: strings.TrimPrefix(txtPath, formsPathWithSlash),
 	}
 	scanner := bufio.NewScanner(f)
-	baseURI := path.Dir(retVal.TxtFileURI)
+	baseURI := path.Dir(form.TxtFileURI)
 	for scanner.Scan() {
 		l := scanner.Text()
 		switch {
 		case strings.HasPrefix(l, "Form:"):
-			trimmed := strings.TrimSpace(strings.TrimPrefix(l, "Form:"))
-			fileNames := strings.Split(trimmed, ",")
-			if len(fileNames) >= 2 {
-				initial := strings.TrimSpace(fileNames[0])
-				viewer := strings.TrimSpace(fileNames[1])
-				retVal.InitialURI = path.Join(baseURI, initial)
-				retVal.ViewerURI = path.Join(baseURI, viewer)
-			} else {
-				view := strings.TrimSpace(fileNames[0])
-				retVal.InitialURI = path.Join(baseURI, view)
-				retVal.ViewerURI = path.Join(baseURI, view)
+			// Form: <composer>,<viewer>
+			files := strings.Split(strings.TrimPrefix(l, "Form:"), ",")
+			// Extend to absolute paths and add missing html extension
+			for i := range files {
+				files[i] = path.Join(baseURI, strings.TrimSpace(files[i]))
+				if ext := path.Ext(files[i]); ext == "" {
+					files[i] += ".html"
+				}
+			}
+			form.InitialURI = files[0]
+			if len(files) > 1 {
+				form.ViewerURI = files[1]
 			}
 		case strings.HasPrefix(l, "ReplyTemplate:"):
-			retVal.ReplyTxtFileURI = path.Join(baseURI, strings.TrimSpace(strings.TrimPrefix(l, "ReplyTemplate:")))
-			tmpForm, _ := m.buildFormFromTxt(path.Join(m.config.FormsPath, retVal.ReplyTxtFileURI))
-			retVal.ReplyInitialURI = tmpForm.InitialURI
-			retVal.ReplyViewerURI = tmpForm.ViewerURI
+			form.ReplyTxtFileURI = path.Join(baseURI, strings.TrimSpace(strings.TrimPrefix(l, "ReplyTemplate:")))
+			tmpForm, _ := m.buildFormFromTxt(path.Join(m.config.FormsPath, form.ReplyTxtFileURI))
+			form.ReplyInitialURI = tmpForm.InitialURI
+			form.ReplyViewerURI = tmpForm.ViewerURI
 		}
 	}
-	return retVal, err
+	return form, err
 }
 
 func findFormFromURI(formName string, folder FormFolder) (Form, error) {
-	retVal := Form{Name: "unknown"}
+	form := Form{Name: "unknown"}
 	for _, subFolder := range folder.Folders {
 		form, err := findFormFromURI(formName, subFolder)
 		if err == nil {
@@ -673,7 +676,7 @@ func findFormFromURI(formName string, folder FormFolder) (Form, error) {
 			return form, nil
 		}
 	}
-	return retVal, errors.New("form not found")
+	return form, errors.New("form not found")
 }
 
 func (m *Manager) findAbsPathForTemplatePath(tmplPath string) (string, error) {
@@ -693,15 +696,103 @@ func (m *Manager) findAbsPathForTemplatePath(tmplPath string) (string, error) {
 		return "", errors.New("can't read template folder")
 	}
 
-	var retVal string
 	for _, name := range fileNames {
 		if strings.EqualFold(filepath.Base(tmplPath), name) {
-			retVal = filepath.Join(absPathTemplateFolder, name)
-			break
+			return filepath.Join(absPathTemplateFolder, name), nil
+		}
+	}
+	return "", fmt.Errorf("unable to resolve absolute template path")
+}
+
+// gpsPos returns the current GPS Position
+func (m *Manager) gpsPos() (gpsd.Position, error) {
+	addr := m.config.GPSd.Addr
+	if addr == "" {
+		return gpsd.Position{}, errors.New("GPSd: not configured.")
+	}
+	if !m.config.GPSd.AllowForms {
+		return gpsd.Position{}, errors.New("GPSd: allow_forms is disabled. GPS position will not be available in form templates.")
+	}
+
+	conn, err := gpsd.Dial(addr)
+	if err != nil {
+		log.Printf("GPSd daemon: %s", err)
+		return gpsd.Position{}, err
+	}
+	defer conn.Close()
+
+	conn.Watch(true)
+	log.Println("Waiting for position from GPSd...")
+	// TODO: make the GPSd timeout configurable
+	return conn.NextPosTimeout(3 * time.Second)
+}
+
+type gpsStyle int
+
+const (
+	// documentation: https://www.winlink.org/sites/default/files/RMSE_FORMS/insertion_tags.zip
+	signedDecimal gpsStyle = iota // 41.1234 -73.4567
+	decimal                       // 46.3795N 121.5835W
+	degreeMinute                  // 46-22.77N 121-35.01W
+)
+
+func gpsFmt(style gpsStyle, pos gpsd.Position) string {
+	var (
+		northing   string
+		easting    string
+		latDegrees int
+		latMinutes float64
+		lonDegrees int
+		lonMinutes float64
+	)
+
+	noPos := gpsd.Position{}
+	if pos == noPos {
+		return "(Not available)"
+	}
+	switch style {
+	case degreeMinute:
+		{
+			latDegrees = int(math.Trunc(math.Abs(pos.Lat)))
+			latMinutes = (math.Abs(pos.Lat) - float64(latDegrees)) * 60
+			lonDegrees = int(math.Trunc(math.Abs(pos.Lon)))
+			lonMinutes = (math.Abs(pos.Lon) - float64(lonDegrees)) * 60
+		}
+		fallthrough
+	case decimal:
+		{
+			if pos.Lat >= 0 {
+				northing = "N"
+			} else {
+				northing = "S"
+			}
+			if pos.Lon >= 0 {
+				easting = "E"
+			} else {
+				easting = "W"
+			}
 		}
 	}
 
-	return retVal, nil
+	switch style {
+	case signedDecimal:
+		return fmt.Sprintf("%.4f %.4f", pos.Lat, pos.Lon)
+	case decimal:
+		return fmt.Sprintf("%.4f%s %.4f%s", math.Abs(pos.Lat), northing, math.Abs(pos.Lon), easting)
+	case degreeMinute:
+		return fmt.Sprintf("%02d-%05.2f%s %03d-%05.2f%s", latDegrees, latMinutes, northing, lonDegrees, lonMinutes, easting)
+	default:
+		return "(Not available)"
+	}
+}
+
+func posToGridSquare(pos gpsd.Position) string {
+	point := maidenhead.NewPoint(pos.Lat, pos.Lon)
+	gridsquare, err := point.GridSquare()
+	if err != nil {
+		return ""
+	}
+	return gridsquare
 }
 
 func (m *Manager) fillFormTemplate(absPathTemplate string, formDestURL string, placeholderRegEx *regexp.Regexp, formVars map[string]string) (string, error) {
@@ -723,16 +814,17 @@ func (m *Manager) fillFormTemplate(absPathTemplate string, formDestURL string, p
 		log.Printf("Warning: unsupported string encoding in template %s, expected utf-8", absPathTemplate)
 	}
 
-	retVal := ""
 	now := time.Now()
-	nowDateTime := now.Format("2006-01-02 15:04:05")
-	nowDateTimeUTC := now.UTC().Format("2006-01-02 15:04:05Z")
-	nowDate := now.Format("2006-01-02")
-	nowTime := now.Format("15:04:05")
-	nowDateUTC := now.UTC().Format("2006-01-02Z")
-	nowTimeUTC := now.UTC().Format("15:04:05Z")
-	udtg := strings.ToUpper(now.UTC().Format("021504Z Jan 2006"))
+	validPos := "NO"
+	nowPos, err := m.gpsPos()
+	if err != nil {
+		debug.Printf("GPSd error: %v", err)
+	} else {
+		validPos = "YES"
+		debug.Printf("GPSd position: %s", gpsFmt(signedDecimal, nowPos))
+	}
 
+	var buf bytes.Buffer
 	scanner := bufio.NewScanner(bytes.NewReader(sanitizedFileContent))
 	for scanner.Scan() {
 		l := scanner.Text()
@@ -742,19 +834,30 @@ func (m *Manager) fillFormTemplate(absPathTemplate string, formDestURL string, p
 		l = strings.ReplaceAll(l, "{MsgSender}", m.config.MyCall)
 		l = strings.ReplaceAll(l, "{Callsign}", m.config.MyCall)
 		l = strings.ReplaceAll(l, "{ProgramVersion}", "Pat "+m.config.AppVersion)
-		l = strings.ReplaceAll(l, "{DateTime}", nowDateTime)
-		l = strings.ReplaceAll(l, "{UDateTime}", nowDateTimeUTC)
-		l = strings.ReplaceAll(l, "{Date}", nowDate)
-		l = strings.ReplaceAll(l, "{UDate}", nowDateUTC)
-		l = strings.ReplaceAll(l, "{UDTG}", udtg)
-		l = strings.ReplaceAll(l, "{Time}", nowTime)
-		l = strings.ReplaceAll(l, "{UTime}", nowTimeUTC)
+		l = strings.ReplaceAll(l, "{DateTime}", formatDateTime(now))
+		l = strings.ReplaceAll(l, "{UDateTime}", formatDateTimeUTC(now))
+		l = strings.ReplaceAll(l, "{Date}", formatDate(now))
+		l = strings.ReplaceAll(l, "{UDate}", formatDateUTC(now))
+		l = strings.ReplaceAll(l, "{UDTG}", formatUDTG(now))
+		l = strings.ReplaceAll(l, "{Time}", formatTime(now))
+		l = strings.ReplaceAll(l, "{UTime}", formatTimeUTC(now))
+		l = strings.ReplaceAll(l, "{GPS}", gpsFmt(degreeMinute, nowPos))
+		l = strings.ReplaceAll(l, "{GPS_DECIMAL}", gpsFmt(decimal, nowPos))
+		l = strings.ReplaceAll(l, "{GPS_SIGNED_DECIMAL}", gpsFmt(signedDecimal, nowPos))
+		// Lots of undocumented tags found in the Winlink check in form.
+		// Note also various ways of capitalizing. Perhaps best to do case insenstive string replacements....
+		l = strings.ReplaceAll(l, "{Latitude}", fmt.Sprintf("%.4f", nowPos.Lat))
+		l = strings.ReplaceAll(l, "{latitude}", fmt.Sprintf("%.4f", nowPos.Lat))
+		l = strings.ReplaceAll(l, "{Longitude}", fmt.Sprintf("%.4f", nowPos.Lon))
+		l = strings.ReplaceAll(l, "{longitude}", fmt.Sprintf("%.4f", nowPos.Lon))
+		l = strings.ReplaceAll(l, "{GridSquare}", posToGridSquare(nowPos))
+		l = strings.ReplaceAll(l, "{GPSValid}", fmt.Sprintf("%s ", validPos))
 		if placeholderRegEx != nil {
 			l = fillPlaceholders(l, placeholderRegEx, formVars)
 		}
-		retVal += l + "\n"
+		buf.WriteString(l + "\n")
 	}
-	return retVal, nil
+	return buf.String(), nil
 }
 
 func (m *Manager) getFormsVersion() string {
@@ -814,11 +917,6 @@ func (b formMessageBuilder) build() (MessageForm, error) {
 		tmplPath = filepath.Join(b.FormsMgr.config.FormsPath, b.Template.ReplyTxtFileURI)
 	}
 
-	retVal, err := b.scanTmplBuildMessage(tmplPath)
-	if err != nil {
-		return MessageForm{}, err
-	}
-
 	b.initFormValues()
 
 	formVarsAsXML := ""
@@ -839,7 +937,14 @@ func (b formMessageBuilder) build() (MessageForm, error) {
 		replier = filepath.Base(b.Template.ReplyTxtFileURI)
 	}
 
-	retVal.AttachmentXML = fmt.Sprintf(`%s<RMS_Express_Form>
+	msgForm, err := b.scanTmplBuildMessage(tmplPath)
+	if err != nil {
+		return MessageForm{}, err
+	}
+
+	// Add XML if a viewer is defined for this form
+	if b.Template.ViewerURI != "" {
+		msgForm.AttachmentXML = fmt.Sprintf(`%s<RMS_Express_Form>
   <form_parameters>
     <xml_file_version>%s</xml_file_version>
     <rms_express_version>%s</rms_express_version>
@@ -854,19 +959,23 @@ func (b formMessageBuilder) build() (MessageForm, error) {
   </variables>
 </RMS_Express_Form>
 `,
-		xml.Header,
-		"1.0",
-		b.FormsMgr.config.AppVersion,
-		time.Now().UTC().Format("20060102150405"),
-		b.FormsMgr.config.MyCall,
-		b.FormsMgr.config.Locator,
-		viewer,
-		replier,
-		formVarsAsXML)
-	retVal.AttachmentName = b.FormsMgr.GetXMLAttachmentNameForForm(b.Template, false)
-	retVal.Subject = strings.TrimSpace(retVal.Subject)
-	retVal.Body = strings.TrimSpace(retVal.Body)
-	return retVal, nil
+			xml.Header,
+			"1.0",
+			b.FormsMgr.config.AppVersion,
+			time.Now().UTC().Format("20060102150405"),
+			b.FormsMgr.config.MyCall,
+			b.FormsMgr.config.Locator,
+			viewer,
+			replier,
+			formVarsAsXML)
+		msgForm.AttachmentName = b.FormsMgr.GetXMLAttachmentNameForForm(b.Template, false)
+	}
+
+	msgForm.To = strings.TrimSpace(msgForm.To)
+	msgForm.Cc = strings.TrimSpace(msgForm.Cc)
+	msgForm.Subject = strings.TrimSpace(msgForm.Subject)
+	msgForm.Body = strings.TrimSpace(msgForm.Body)
+	return msgForm, nil
 }
 
 func (b formMessageBuilder) initFormValues() {
@@ -899,17 +1008,22 @@ func (b formMessageBuilder) scanTmplBuildMessage(tmplPath string) (MessageForm, 
 	placeholderRegEx := regexp.MustCompile(`<[vV][aA][rR]\s+(\w+)\s*>`)
 	scanner := bufio.NewScanner(infile)
 
-	var retVal MessageForm
+	var msgForm MessageForm
+	var inBody bool
 	for scanner.Scan() {
 		lineTmpl := scanner.Text()
 		lineTmpl = fillPlaceholders(lineTmpl, placeholderRegEx, b.FormValues)
 		lineTmpl = strings.ReplaceAll(lineTmpl, "<MsgSender>", b.FormsMgr.config.MyCall)
 		lineTmpl = strings.ReplaceAll(lineTmpl, "<ProgramVersion>", "Pat "+b.FormsMgr.config.AppVersion)
-		if strings.HasPrefix(lineTmpl, "Form:") ||
-			strings.HasPrefix(lineTmpl, "ReplyTemplate:") ||
-			strings.HasPrefix(lineTmpl, "To:") ||
-			strings.HasPrefix(lineTmpl, "Msg:") {
+		if strings.HasPrefix(lineTmpl, "Form:") {
 			continue
+		}
+		if strings.HasPrefix(lineTmpl, "ReplyTemplate:") {
+			continue
+		}
+		if strings.HasPrefix(lineTmpl, "Msg:") {
+			lineTmpl = strings.TrimSpace(strings.TrimPrefix(lineTmpl, "Msg:"))
+			inBody = true
 		}
 		if b.Interactive {
 			matches := placeholderRegEx.FindAllStringSubmatch(lineTmpl, -1)
@@ -930,14 +1044,20 @@ func (b formMessageBuilder) scanTmplBuildMessage(tmplPath string) (MessageForm, 
 		}
 
 		lineTmpl = fillPlaceholders(lineTmpl, placeholderRegEx, b.FormValues)
-		if strings.HasPrefix(lineTmpl, "Subject:") {
-			retVal.Subject = strings.TrimPrefix(lineTmpl, "Subject:")
-		} else {
-			retVal.Body += lineTmpl + "\n"
+		switch {
+		case strings.HasPrefix(lineTmpl, "Subject:"):
+			msgForm.Subject = strings.TrimPrefix(lineTmpl, "Subject:")
+		case strings.HasPrefix(lineTmpl, "To:"):
+			msgForm.To = strings.TrimPrefix(lineTmpl, "To:")
+		case strings.HasPrefix(lineTmpl, "Cc:"):
+			msgForm.Cc = strings.TrimPrefix(lineTmpl, "Cc:")
+		case inBody:
+			msgForm.Body += lineTmpl + "\n"
+		default:
+			log.Printf("skipping unknown template line: '%s'", lineTmpl)
 		}
 	}
-
-	return retVal, nil
+	return msgForm, nil
 }
 
 func xmlEscape(s string) string {
@@ -965,6 +1085,7 @@ func fillPlaceholders(s string, re *regexp.Regexp, values map[string]string) str
 
 func (m *Manager) cleanupOldFormData() {
 	m.postedFormData.Lock()
+	defer m.postedFormData.Unlock()
 	for key, form := range m.postedFormData.internalFormDataMap {
 		elapsed := time.Since(form.Submitted).Hours()
 		if elapsed > 24 {
@@ -972,7 +1093,6 @@ func (m *Manager) cleanupOldFormData() {
 			delete(m.postedFormData.internalFormDataMap, key)
 		}
 	}
-	m.postedFormData.Unlock()
 }
 
 func (m *Manager) isNewerVersion(newestVersion string) bool {
@@ -997,12 +1117,12 @@ func (m *Manager) isNewerVersion(newestVersion string) bool {
 
 type httpClient struct{ http.Client }
 
-func (c httpClient) Get(m *Manager, url string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func (c httpClient) Get(ctx context.Context, userAgent, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", m.config.UserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Cache-Control", "no-cache")
 	return c.Do(req)
 }

@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -102,11 +103,14 @@ func composeMessageHeader(replyMsg *fbb.Message) *fbb.Message {
 	return msg
 }
 
-func composeMessage(args []string) {
+func composeMessage(ctx context.Context, args []string) {
 	set := pflag.NewFlagSet("compose", pflag.ExitOnError)
+	// From default is --mycall but it can be overriden with -r
+	from := set.StringP("from", "r", fOptions.MyCall, "")
 	subject := set.StringP("subject", "s", "", "")
 	attachments := set.StringArrayP("attachment", "a", nil, "")
 	ccs := set.StringArrayP("cc", "c", nil, "")
+	p2pOnly := set.BoolP("p2p-only", "", false, "")
 	set.Parse(args)
 
 	// Remaining args are recipients
@@ -122,14 +126,13 @@ func composeMessage(args []string) {
 	// Check if any args are set. If so, go non-interactive
 	// Otherwise, interactive
 	if (len(*subject) + len(*attachments) + len(*ccs) + len(recipients)) > 0 {
-		noninteractiveComposeMessage(*subject, *attachments, *ccs, recipients)
+		noninteractiveComposeMessage(*from, *subject, *attachments, *ccs, recipients, *p2pOnly)
 	} else {
 		interactiveComposeMessage(nil)
 	}
 }
 
-func noninteractiveComposeMessage(subject string, attachments []string,
-	ccs []string, recipients []string) {
+func noninteractiveComposeMessage(from string, subject string, attachments []string, ccs []string, recipients []string, p2pOnly bool) {
 	// We have to verify the args here. Follow the same pattern as main()
 	// We'll allow a missing recipient if CC is present (or vice versa)
 	if len(recipients)+len(ccs) <= 0 {
@@ -143,7 +146,7 @@ func noninteractiveComposeMessage(subject string, attachments []string,
 	}
 
 	msg := fbb.NewMessage(fbb.Private, fOptions.MyCall)
-	msg.SetFrom(fOptions.MyCall)
+	msg.SetFrom(from)
 	for _, to := range recipients {
 		msg.AddTo(to)
 	}
@@ -171,11 +174,14 @@ func noninteractiveComposeMessage(subject string, attachments []string,
 	}
 
 	msg.SetBody(string(body))
+	if p2pOnly {
+		msg.Header.Set("X-P2POnly", "true")
+	}
 
 	postMessage(msg)
 }
 
-// This is currently an alias for interactiveComposeMessage but keeping as a seperate
+// This is currently an alias for interactiveComposeMessage but keeping as a separate
 // call path for the future
 func composeReplyMessage(replyMsg *fbb.Message) {
 	interactiveComposeMessage(replyMsg)
@@ -264,7 +270,7 @@ func readAttachment(path string) (*fbb.File, error) {
 	name := filepath.Base(path)
 
 	var resizeImage bool
-	if isImageMediaType(name, "") {
+	if isConvertableImageMediaType(name, "") {
 		fmt.Print("This seems to be an image. Auto resize? [Y/n]: ")
 		ans := readLine()
 		resizeImage = ans == "" || strings.EqualFold("y", ans)
@@ -293,7 +299,7 @@ func readLine() string {
 	return strings.TrimSpace(str)
 }
 
-func composeFormReport(args []string) {
+func composeFormReport(ctx context.Context, args []string) {
 	var tmplPathArg string
 
 	set := pflag.NewFlagSet("form", pflag.ExitOnError)
@@ -304,7 +310,7 @@ func composeFormReport(args []string) {
 
 	formMsg, err := formsMgr.ComposeForm(tmplPathArg, msg.Subject())
 	if err != nil {
-		log.Printf("failed to compose message for template %s", tmplPathArg)
+		log.Printf("failed to compose message for template: %v", err)
 		return
 	}
 
@@ -326,8 +332,10 @@ func composeFormReport(args []string) {
 
 	msg.SetBody(formMsg.Body)
 
-	attachmentFile := fbb.NewFile(formMsg.AttachmentName, []byte(formMsg.AttachmentXML))
-	msg.AddFile(attachmentFile)
+	if xml := formMsg.AttachmentXML; xml != "" {
+		attachmentFile := fbb.NewFile(formMsg.AttachmentName, []byte(xml))
+		msg.AddFile(attachmentFile)
+	}
 
 	postMessage(msg)
 }

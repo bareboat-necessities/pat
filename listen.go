@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"strings"
@@ -29,16 +30,25 @@ func Unlisten(param string) {
 func Listen(listenStr string) {
 	methods := strings.FieldsFunc(listenStr, SplitFunc)
 	for _, method := range methods {
+		// Rewrite the generic ax25:// scheme to use a specified AX.25 engine.
+		if method == MethodAX25 {
+			method = defaultAX25Method()
+		}
+
 		switch strings.ToLower(method) {
-		case MethodWinmor:
-			listenHub.Enable(WINMORListener{})
 		case MethodArdop:
 			listenHub.Enable(ARDOPListener{})
 		case MethodTelnet:
 			listenHub.Enable(TelnetListener{})
-		case MethodAX25:
-			listenHub.Enable(&AX25Listener{})
-		case MethodSerialTNC:
+		case MethodAX25AGWPE:
+			listenHub.Enable(&AX25AGWPEListener{})
+		case MethodAX25Linux:
+			listenHub.Enable(&AX25LinuxListener{})
+		case MethodVaraFM:
+			listenHub.Enable(VaraFMListener{})
+		case MethodVaraHF:
+			listenHub.Enable(VaraHFListener{})
+		case MethodAX25SerialTNC, MethodSerialTNCDeprecated:
 			log.Printf("%s listen not implemented, ignoring.", method)
 		default:
 			log.Printf("'%s' is not a valid listen method", method)
@@ -48,53 +58,38 @@ func Listen(listenStr string) {
 	log.Printf("Listening for incoming traffic on %s...", listenStr)
 }
 
-type AX25Listener struct{ stopBeacon chan<- struct{} }
+type AX25LinuxListener struct{ stopBeacon func() }
 
-func (l *AX25Listener) Init() (net.Listener, error) {
-	return ax25.ListenAX25(config.AX25.Port, fOptions.MyCall)
+func (l *AX25LinuxListener) Init() (net.Listener, error) {
+	return ax25.ListenAX25(config.AX25Linux.Port, fOptions.MyCall)
 }
 
-func (l *AX25Listener) BeaconStart() error {
-	if config.AX25.Beacon.Every > 0 {
-		l.stopBeacon = l.beaconLoop(time.Duration(config.AX25.Beacon.Every) * time.Second)
+func (l *AX25LinuxListener) BeaconStart() error {
+	interval := time.Duration(config.AX25.Beacon.Every) * time.Second
+	if interval == 0 {
+		return nil
 	}
+	b, err := ax25.NewAX25Beacon(config.AX25Linux.Port, fOptions.MyCall, config.AX25.Beacon.Destination, config.AX25.Beacon.Message)
+	if err != nil {
+		return err
+	}
+	l.stopBeacon = doEvery(interval, func() {
+		if err := b.Now(); err != nil {
+			log.Printf("%s beacon failed: %s", l.Name(), err)
+			l.stopBeacon()
+		}
+	})
 	return nil
 }
 
-func (l *AX25Listener) BeaconStop() {
-	select {
-	case l.stopBeacon <- struct{}{}:
-	default:
+func (l *AX25LinuxListener) BeaconStop() {
+	if l.stopBeacon != nil {
+		l.stopBeacon()
 	}
 }
 
-func (l *AX25Listener) beaconLoop(dur time.Duration) chan<- struct{} {
-	stop := make(chan struct{}, 1)
-	go func() {
-		b, err := ax25.NewAX25Beacon(config.AX25.Port, fOptions.MyCall, config.AX25.Beacon.Destination, config.AX25.Beacon.Message)
-		if err != nil {
-			log.Printf("Unable to activate beacon: %s", err)
-			return
-		}
-
-		t := time.Tick(dur)
-		for {
-			select {
-			case <-t:
-				if err := b.Now(); err != nil {
-					log.Printf("%s beacon failed: %s", l.Name(), err)
-					return
-				}
-			case <-stop:
-				return
-			}
-		}
-	}()
-	return stop
-}
-
-func (l *AX25Listener) CurrentFreq() (Frequency, bool) { return 0, false }
-func (l *AX25Listener) Name() string                   { return MethodAX25 }
+func (l *AX25LinuxListener) CurrentFreq() (Frequency, bool) { return 0, false }
+func (l *AX25LinuxListener) Name() string                   { return MethodAX25Linux }
 
 type ARDOPListener struct{}
 
@@ -124,22 +119,79 @@ func (l ARDOPListener) BeaconStart() error {
 
 func (l ARDOPListener) BeaconStop() { adTNC.BeaconEvery(0) }
 
-type WINMORListener struct{}
+type VaraFMListener struct{}
 
-func (l WINMORListener) Name() string { return MethodWinmor }
-func (l WINMORListener) Init() (net.Listener, error) {
-	if err := initWinmorTNC(); err != nil {
+func (l VaraFMListener) Name() string { return MethodVaraFM }
+func (l VaraFMListener) Init() (net.Listener, error) {
+	if err := initVaraFMModem(); err != nil {
 		return nil, err
 	}
-	return wmTNC.Listen(config.Winmor.InboundBandwidth)
+	ln, err := varaFMModem.Listen()
+	if err != nil {
+		return nil, err
+	}
+	return ln, err
 }
 
-func (l WINMORListener) CurrentFreq() (Frequency, bool) {
-	if rig, ok := rigs[config.Winmor.Rig]; ok {
+func (l VaraFMListener) CurrentFreq() (Frequency, bool) {
+	if rig, ok := rigs[config.VaraFM.Rig]; ok {
 		f, _ := rig.GetFreq()
 		return Frequency(f), ok
 	}
 	return 0, false
+}
+
+type VaraHFListener struct{}
+
+func (l VaraHFListener) Name() string { return MethodVaraHF }
+func (l VaraHFListener) Init() (net.Listener, error) {
+	if err := initVaraHFModem(); err != nil {
+		return nil, err
+	}
+	ln, err := varaHFModem.Listen()
+	if err != nil {
+		return nil, err
+	}
+	return ln, err
+}
+
+func (l VaraHFListener) CurrentFreq() (Frequency, bool) {
+	if rig, ok := rigs[config.VaraHF.Rig]; ok {
+		f, _ := rig.GetFreq()
+		return Frequency(f), ok
+	}
+	return 0, false
+}
+
+type AX25AGWPEListener struct{ stopBeacon func() }
+
+func (l *AX25AGWPEListener) Name() string { return MethodAX25AGWPE }
+
+func (l *AX25AGWPEListener) Init() (net.Listener, error) {
+	if err := initAGWPE(); err != nil {
+		return nil, err
+	}
+	return agwpeTNC.Listen()
+}
+
+func (l *AX25AGWPEListener) CurrentFreq() (Frequency, bool) { return 0, false }
+
+func (l *AX25AGWPEListener) BeaconStart() error {
+	b := config.AX25.Beacon
+	interval := time.Duration(b.Every) * time.Second
+	l.stopBeacon = doEvery(interval, func() {
+		if err := agwpeTNC.SendUI([]byte(b.Message), b.Destination); err != nil {
+			log.Printf("%s beacon failed: %s", l.Name(), err)
+			l.stopBeacon()
+		}
+	})
+	return nil
+}
+
+func (l AX25AGWPEListener) BeaconStop() {
+	if l.stopBeacon != nil {
+		l.stopBeacon()
+	}
 }
 
 type TelnetListener struct{}
@@ -147,3 +199,23 @@ type TelnetListener struct{}
 func (l TelnetListener) Name() string                   { return MethodTelnet }
 func (l TelnetListener) Init() (net.Listener, error)    { return telnet.Listen(config.Telnet.ListenAddr) }
 func (l TelnetListener) CurrentFreq() (Frequency, bool) { return 0, false }
+
+func doEvery(interval time.Duration, fn func()) (cancel func()) {
+	if interval == 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				fn()
+			}
+		}
+	}()
+	return cancel
+}

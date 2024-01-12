@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -49,6 +50,12 @@ type RMS struct {
 }
 
 func (r RMS) IsMode(mode string) bool {
+	if mode == MethodVaraFM {
+		return strings.HasPrefix(r.Modes, "VARA FM")
+	}
+	if mode == MethodVaraHF {
+		return strings.HasPrefix(r.Modes, "VARA") && !strings.HasPrefix(r.Modes, "VARA FM")
+	}
 	return strings.Contains(strings.ToLower(r.Modes), mode)
 }
 
@@ -62,7 +69,7 @@ func (r byDist) Len() int           { return len(r) }
 func (r byDist) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r byDist) Less(i, j int) bool { return r[i].Distance < r[j].Distance }
 
-func rmsListHandle(args []string) {
+func rmsListHandle(ctx context.Context, args []string) {
 	set := pflag.NewFlagSet("rmslist", pflag.ExitOnError)
 	mode := set.StringP("mode", "m", "", "")
 	band := set.StringP("band", "b", "", "")
@@ -76,7 +83,7 @@ func rmsListHandle(args []string) {
 	}
 
 	*mode = strings.ToLower(*mode)
-	rList, err := ReadRMSList(*forceDownload, func(rms RMS) bool {
+	rList, err := ReadRMSList(ctx, *forceDownload, func(rms RMS) bool {
 		switch {
 		case query != "" && !strings.HasPrefix(rms.Callsign, query):
 			return false
@@ -113,7 +120,7 @@ func rmsListHandle(args []string) {
 	}
 }
 
-func ReadRMSList(forceDownload bool, filterFn func(rms RMS) (keep bool)) ([]RMS, error) {
+func ReadRMSList(ctx context.Context, forceDownload bool, filterFn func(rms RMS) (keep bool)) ([]RMS, error) {
 	me, err := maidenhead.ParseLocator(config.Locator)
 	if err != nil {
 		log.Print("Missing or Invalid Locator, will not compute distance and Azimuth")
@@ -127,7 +134,7 @@ func ReadRMSList(forceDownload bool, filterFn func(rms RMS) (keep bool)) ([]RMS,
 	filePath := filepath.Join(directories.DataDir(), fileName+".json")
 	debug.Printf("RMS list file is %s", filePath)
 
-	f, err := cmsapi.GetGatewayStatusCached(filePath, forceDownload, config.ServiceCodes...)
+	f, err := cmsapi.GetGatewayStatusCached(ctx, filePath, forceDownload, config.ServiceCodes...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +144,7 @@ func ReadRMSList(forceDownload bool, filterFn func(rms RMS) (keep bool)) ([]RMS,
 		return nil, err
 	}
 
-	var slice []RMS
+	var slice = []RMS{}
 	for _, gw := range status.Gateways {
 		for _, channel := range gw.Channels {
 			r := RMS{
@@ -164,13 +171,44 @@ func ReadRMSList(forceDownload bool, filterFn func(rms RMS) (keep bool)) ([]RMS,
 	return slice, nil
 }
 
-func toURL(gc cmsapi.GatewayChannel, targetcall string) *url.URL {
+func toURL(gc cmsapi.GatewayChannel, targetCall string) *url.URL {
 	freq := Frequency(gc.Frequency).Dial(gc.SupportedModes)
-	chURL, _ := url.Parse(fmt.Sprintf("%s:///%s?freq=%v", toTransport(gc), targetcall, freq.KHz()))
+	chURL, _ := url.Parse(fmt.Sprintf("%s:///%s?freq=%v", toTransport(gc), targetCall, freq.KHz()))
+	addBandwidth(gc, chURL)
 	return chURL
 }
 
-var transports = []string{MethodWinmor, MethodAX25, MethodPactor, MethodArdop}
+func addBandwidth(gc cmsapi.GatewayChannel, chURL *url.URL) {
+	bw := ""
+	modeF := strings.Fields(gc.SupportedModes)
+	if modeF[0] == "ARDOP" {
+		if len(modeF) > 1 {
+			bw = modeF[1] + "MAX"
+		}
+	} else if modeF[0] == "VARA" {
+		if len(modeF) > 1 && modeF[1] == "FM" {
+			// VARA FM should not set bandwidth in connect URL or sent over the command port,
+			// it's set in the VARA Setup dialog
+			bw = ""
+		} else {
+			// VARA HF may be 500, 2750, or none which is implicitly 2300
+			if len(modeF) > 1 {
+				if len(modeF) > 1 {
+					bw = modeF[1]
+				}
+			} else {
+				bw = "2300"
+			}
+		}
+	}
+	if bw != "" {
+		v := chURL.Query()
+		v.Set("bw", bw)
+		chURL.RawQuery = v.Encode()
+	}
+}
+
+var transports = []string{MethodAX25, MethodPactor, MethodArdop, MethodVaraFM, MethodVaraHF}
 
 func toTransport(gc cmsapi.GatewayChannel) string {
 	modes := strings.ToLower(gc.SupportedModes)
@@ -178,6 +216,12 @@ func toTransport(gc cmsapi.GatewayChannel) string {
 		if strings.Contains(modes, "packet") {
 			// bug(maritnhpedersen): We really don't know which transport to use here. It could be serial-tnc or ax25, but ax25 is most likely.
 			return MethodAX25
+		}
+		if strings.HasPrefix(modes, "vara fm") {
+			return MethodVaraFM
+		}
+		if strings.HasPrefix(modes, "vara") {
+			return MethodVaraHF
 		}
 		if strings.Contains(modes, transport) {
 			return transport

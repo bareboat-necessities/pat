@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -93,7 +92,7 @@ func sessionExchange(conn net.Conn, targetCall string, master bool) error {
 			return config.SecureLoginPassword, nil
 		}
 		for _, aux := range config.AuxAddrs {
-			if addr.Addr != aux.Address {
+			if !addr.EqualString(aux.Address) {
 				continue
 			}
 			switch {
@@ -121,10 +120,6 @@ func sessionExchange(conn net.Conn, targetCall string, master bool) error {
 	}
 
 	log.Printf("Connected to %s (%s)", conn.RemoteAddr(), conn.RemoteAddr().Network())
-
-	// Close connection on os.Interrupt
-	stop := handleInterrupt()
-	defer close(stop)
 
 	start := time.Now()
 
@@ -163,55 +158,28 @@ func sessionExchange(conn net.Conn, targetCall string, master bool) error {
 	return err
 }
 
-func handleInterrupt() (stop chan struct{}) {
-	stop = make(chan struct{})
-
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt)
-		defer func() { signal.Stop(sig); close(sig) }()
-
-		dirtyDisconnectNext := false // So we can do a dirty disconnect on the second interrupt
-		for {
-			select {
-			case <-stop:
-				return
-			case <-sig:
-				abortActiveConnection(dirtyDisconnectNext)
-				dirtyDisconnectNext = !dirtyDisconnectNext
-			}
-		}
-	}()
-
-	return stop
-}
-
 func abortActiveConnection(dirty bool) (ok bool) {
 	switch {
+	case dirty:
+		// This mean we've already tried to abort, but the connection is still active.
+		// Fallback to the below cases to try to identify the busy modem and abort hard.
+	case dialing != nil:
+		// If we're currently dialing a transport, attempt to abort by cancelling the associated context.
+		log.Printf("Got abort signal while dialing %s, cancelling...", dialing.Scheme)
+		go dialCancelFunc()
+		return true
 	case exchangeConn != nil:
+		// If we have an active connection, close it gracefully.
 		log.Println("Got abort signal, disconnecting...")
-		exchangeConn.Close()
+		go exchangeConn.Close()
 		return true
-	case pModem != nil:
-		log.Println("Disconnecting pactor...")
-		err := pModem.Close()
-		if err != nil {
-			log.Println(err)
-		}
-		return err == nil
-	case wmTNC != nil && !wmTNC.Idle():
-		if dirty {
-			log.Println("Dirty disconnecting winmor...")
-			wmTNC.DirtyDisconnect()
-			return true
-		}
-		log.Println("Disconnecting winmor...")
-		go func() {
-			if err := wmTNC.Disconnect(); err != nil {
-				log.Println(err)
-			}
-		}()
-		return true
+	}
+
+	// Any connection and/or dial operation has been cancelled at this point.
+	// User is attempting to abort something, so try to identify any non-idling transports and abort.
+	// It might be a "dirty disconnect" of an already cancelled connection or dial operation which is in the
+	// process of gracefully terminating. It might also be an attempt to close an inbound P2P connection.
+	switch {
 	case adTNC != nil && !adTNC.Idle():
 		if dirty {
 			log.Println("Dirty disconnecting ardop...")
@@ -225,9 +193,39 @@ func abortActiveConnection(dirty bool) (ok bool) {
 			}
 		}()
 		return true
-	case dialing != nil:
-		log.Printf("Transport %s's dialer can not be aborted at this stage", dialing.Scheme)
-		return false
+	case varaFMModem != nil && !varaFMModem.Idle():
+		if dirty {
+			log.Println("Dirty disconnecting varafm...")
+			varaFMModem.Abort()
+			return true
+		}
+		log.Println("Disconnecting varafm...")
+		go func() {
+			if err := varaFMModem.Close(); err != nil {
+				log.Println(err)
+			}
+		}()
+		return true
+	case varaHFModem != nil && !varaHFModem.Idle():
+		if dirty {
+			log.Println("Dirty disconnecting varahf...")
+			varaHFModem.Abort()
+			return true
+		}
+		log.Println("Disconnecting varahf...")
+		go func() {
+			if err := varaHFModem.Close(); err != nil {
+				log.Println(err)
+			}
+		}()
+		return true
+	case pModem != nil:
+		log.Println("Disconnecting pactor...")
+		err := pModem.Close()
+		if err != nil {
+			log.Println(err)
+		}
+		return err == nil
 	default:
 		return false
 	}

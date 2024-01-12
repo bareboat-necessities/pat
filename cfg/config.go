@@ -6,6 +6,9 @@ package cfg
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/la5nta/wl2k-go/transport/ardop"
@@ -73,24 +76,27 @@ type Config struct {
 
 	// Connect aliases
 	//
-	// Example: {"LA1B-10": "ax25:///LD5GU/LA1B-10", "LA1B": "winmor://LA3F?freq=5350"}
+	// Example: {"LA1B-10": "ax25:///LD5GU/LA1B-10", "LA1B": "ardop://LA3F?freq=5350"}
 	// Any occurrence of the substring "{mycall}" will be replaced with user's callsign.
 	ConnectAliases map[string]string `json:"connect_aliases"`
 
 	// Methods to listen for incoming P2P connections by default.
 	//
-	// Example: ["ax25", "winmor", "telnet", "ardop"]
+	// Example: ["ax25", "telnet", "ardop"]
 	Listen []string `json:"listen"`
 
 	// Hamlib rigs available (with reference name) for ptt and frequency control.
 	HamlibRigs map[string]HamlibConfig `json:"hamlib_rigs"`
 
 	AX25      AX25Config      `json:"ax25"`       // See AX25Config.
+	AX25Linux AX25LinuxConfig `json:"ax25_linux"` // See AX25LinuxConfig.
+	AGWPE     AGWPEConfig     `json:"agwpe"`      // See AGWPEConfig.
 	SerialTNC SerialTNCConfig `json:"serial-tnc"` // See SerialTNCConfig.
-	Winmor    WinmorConfig    `json:"winmor"`     // See WinmorConfig.
 	Ardop     ArdopConfig     `json:"ardop"`      // See ArdopConfig.
 	Pactor    PactorConfig    `json:"pactor"`     // See PactorConfig.
 	Telnet    TelnetConfig    `json:"telnet"`     // See TelnetConfig.
+	VaraHF    VaraConfig      `json:"varahf"`     // See VaraConfig.
+	VaraFM    VaraConfig      `json:"varafm"`     // See VaraConfig.
 
 	// See GPSdConfig.
 	GPSd GPSdConfig `json:"gpsd"`
@@ -105,26 +111,20 @@ type Config struct {
 	//   # Connect to telnet once every hour
 	//   "@hourly": "connect telnet"
 	//
-	//   # Change winmor listen frequency based on hour of day
-	//   "00 10 * * *": "freq winmor:7350.000", # 40m from 10:00
-	//   "00 18 * * *": "freq winmor:5347.000", # 60m from 18:00
-	//   "00 22 * * *": "freq winmor:3602.000"  # 80m from 22:00
+	//   # Change ardop listen frequency based on hour of day
+	//   "00 10 * * *": "freq ardop:7350.000", # 40m from 10:00
+	//   "00 18 * * *": "freq ardop:5347.000", # 60m from 18:00
+	//   "00 22 * * *": "freq ardop:3602.000"  # 80m from 22:00
 	Schedule map[string]string `json:"schedule"`
 
 	// By default, Pat posts your callsign and running version to the Winlink CMS Web Services
 	//
 	// Set to true if you don't want your information sent.
 	VersionReportingDisabled bool `json:"version_reporting_disabled"`
-
-	// Path to root of the Winlink Standard_Forms folder.
-	// Unzip after downloading from winlink.org
-	//
-	// Deprecated: in favor of the --forms flag
-	FormsPath string `json:"forms_path,omitempty"`
 }
 
 type HamlibConfig struct {
-	// The network type ("serial" or "tcp"). Use 'tcp' for rigctld.
+	// The network type ("serial" or "tcp"). Use 'tcp' for rigctld (default).
 	//
 	// (For serial support: build with "-tags libhamlib".)
 	Network string `json:"network,omitempty"`
@@ -139,30 +139,11 @@ type HamlibConfig struct {
 	VFO string `json:"VFO"`
 }
 
-type WinmorConfig struct {
-	// Network address of the Winmor TNC (e.g. localhost:8500).
-	Addr string `json:"addr"`
-
-	// Bandwidth to use when getting an inbound connection (500/1600).
-	InboundBandwidth int `json:"inbound_bandwidth"`
-
-	// TX audio drive level
-	//
-	// Set to 0 to use WINMOR defaults
-	DriveLevel int `json:"drive_level"`
-
-	// (optional) Reference name to the Hamlib rig to control frequency and ptt.
-	Rig string `json:"rig"`
-
-	// Set to true if hamlib should control PTT (SignaLink=false, most rigexpert=true).
-	PTTControl bool `json:"ptt_ctrl"`
-}
-
 type ArdopConfig struct {
 	// Network address of the Ardop TNC (e.g. localhost:8515).
 	Addr string `json:"addr"`
 
-	// ARQ bandwidth (200/500/1000/2000 MAX/FORCED).
+	// Default/listen ARQ bandwidth (200/500/1000/2000 MAX/FORCED).
 	ARQBandwidth ardop.Bandwidth `json:"arq_bandwidth"`
 
 	// (optional) Reference name to the Hamlib rig to control frequency and ptt.
@@ -177,6 +158,56 @@ type ArdopConfig struct {
 	// Send FSK CW ID after an ID frame.
 	CWID bool `json:"cwid_enabled"`
 }
+
+type VaraConfig struct {
+	// Network host of the VARA modem (defaults to localhost:8300).
+	Addr string `json:"addr"`
+
+	// Default/listen bandwidth (HF: 500/2300/2750 Hz).
+	Bandwidth int `json:"bandwidth"`
+
+	// (optional) Reference name to the Hamlib rig to control frequency and ptt.
+	Rig string `json:"rig"`
+
+	// Set to true if hamlib should control PTT (SignaLink=false, most rigexpert=true).
+	PTTControl bool `json:"ptt_ctrl"`
+}
+
+// UnmarshalJSON implements VaraConfig JSON unmarshalling with support for legacy format.
+func (v *VaraConfig) UnmarshalJSON(b []byte) error {
+	type newFormat VaraConfig
+	legacy := struct {
+		newFormat
+		Host     string `json:"host"`
+		CmdPort  int    `json:"cmdPort"`
+		DataPort int    `json:"dataPort"`
+	}{}
+	if err := json.Unmarshal(b, &legacy); err != nil {
+		return err
+	}
+	if legacy.newFormat.Addr == "" && legacy.Host != "" {
+		legacy.newFormat.Addr = fmt.Sprintf("%s:%d", legacy.Host, legacy.CmdPort)
+	}
+	*v = VaraConfig(legacy.newFormat)
+	if !v.IsZero() && v.CmdPort() <= 0 {
+		return fmt.Errorf("invalid addr format")
+	}
+	return nil
+}
+
+func (v VaraConfig) IsZero() bool { return v == (VaraConfig{}) }
+
+func (v VaraConfig) Host() string {
+	host, _, _ := net.SplitHostPort(v.Addr)
+	return host
+}
+
+func (v VaraConfig) CmdPort() int {
+	_, portStr, _ := net.SplitHostPort(v.Addr)
+	port, _ := strconv.Atoi(portStr)
+	return port
+}
+func (v VaraConfig) DataPort() int { return v.CmdPort() + 1 }
 
 type PactorConfig struct {
 	// Path/port to TNC device (e.g. /dev/ttyUSB0 or COM1).
@@ -216,17 +247,41 @@ type SerialTNCConfig struct {
 
 	// Type of TNC (currently only 'kenwood').
 	Type string `json:"type"`
-}
-
-type AX25Config struct {
-	// axport to use (as defined in /etc/ax25/axports).
-	Port string `json:"port"`
-
-	// Optional beacon when listening for incoming packet-p2p connections.
-	Beacon BeaconConfig `json:"beacon"`
 
 	// (optional) Reference name to the Hamlib rig for frequency control.
 	Rig string `json:"rig"`
+}
+
+type AGWPEConfig struct {
+	// The TCP address of the TNC.
+	Addr string `json:"addr"`
+
+	// The AGWPE "radio port" (0-3).
+	RadioPort int `json:"radio_port"`
+}
+
+type AX25Config struct {
+	// The AX.25 engine to be used.
+	//
+	// Valid options are:
+	//   - linux
+	//   - agwpe
+	//   - serial-tnc
+	Engine AX25Engine `json:"engine"`
+
+	// (optional) Reference name to the Hamlib rig for frequency control.
+	Rig string `json:"rig"`
+
+	// DEPRECATED: See AX25Linux.Port.
+	AXPort string `json:"port,omitempty"`
+
+	// Optional beacon when listening for incoming packet-p2p connections.
+	Beacon BeaconConfig `json:"beacon"`
+}
+
+type AX25LinuxConfig struct {
+	// axport to use (as defined in /etc/ax25/axports). Only applicable to ax25 engine 'linux'.
+	Port string `json:"port"`
 }
 
 type BeaconConfig struct {
@@ -241,16 +296,20 @@ type BeaconConfig struct {
 }
 
 type GPSdConfig struct {
-	// enable GPSd support in web interface
-	// WARNING: If you enable GPSd http endpoint (enable_http) you might
-	// expose your current position to anyone who has access to Pat!!!
+	// Enable GPSd proxy for HTTP (web GUI)
+	//
+	// Caution: Your GPS position will be accessible to any network device able to access Pat's HTTP interface.
 	EnableHTTP bool `json:"enable_http"`
 
-	// Use server time instead of timestamp provided by GPSd (e.g for older GPS
-	// device with week roll-over issue)
+	// Allow Winlink forms to use GPSd for aquiring your position.
+	//
+	// Caution: Your current GPS position will be automatically injected, without your explicit consent, into forms requesting such information.
+	AllowForms bool `json:"allow_forms"`
+
+	// Use server time instead of timestamp provided by GPSd (e.g for older GPS device with week roll-over issue).
 	UseServerTime bool `json:"use_server_time"`
 
-	// Address and port of GPSd server (e.g. localhost:2947)
+	// Address and port of GPSd server (e.g. localhost:2947).
 	Addr string `json:"addr"`
 }
 
@@ -264,12 +323,15 @@ var DefaultConfig = Config{
 	Listen:   []string{},
 	HTTPAddr: "localhost:8080",
 	AX25: AX25Config{
-		Port: "wl2k",
+		Engine: DefaultAX25Engine(),
 		Beacon: BeaconConfig{
 			Every:       3600,
 			Message:     "Winlink P2P",
 			Destination: "IDENT",
 		},
+	},
+	AX25Linux: AX25LinuxConfig{
+		Port: "wl2k",
 	},
 	SerialTNC: SerialTNCConfig{
 		Path:       "/dev/ttyUSB0",
@@ -277,9 +339,9 @@ var DefaultConfig = Config{
 		HBaud:      1200,
 		Type:       "Kenwood",
 	},
-	Winmor: WinmorConfig{
-		Addr:             "localhost:8500",
-		InboundBandwidth: 1600,
+	AGWPE: AGWPEConfig{
+		Addr:      "localhost:8000",
+		RadioPort: 0,
 	},
 	Ardop: ArdopConfig{
 		Addr:         "localhost:8515",
@@ -294,15 +356,20 @@ var DefaultConfig = Config{
 		ListenAddr: ":8774",
 		Password:   "",
 	},
+	VaraHF: VaraConfig{
+		Addr:      "localhost:8300",
+		Bandwidth: 2300,
+	},
+	VaraFM: VaraConfig{
+		Addr: "localhost:8300",
+	},
 	GPSd: GPSdConfig{
 		EnableHTTP:    false, // Default to false to help protect privacy of unknowing users (see github.com//issues/146)
+		AllowForms:    false, // Default to false to help protect location privacy of unknowing users
 		UseServerTime: false,
 		Addr:          "localhost:2947", // Default listen address for GPSd
 	},
 	GPSdAddrLegacy: "",
 	Schedule:       map[string]string{},
 	HamlibRigs:     map[string]HamlibConfig{},
-
-	// Path to root of the unzipped Winlink Standard_Forms folder.
-	FormsPath: "",
 }

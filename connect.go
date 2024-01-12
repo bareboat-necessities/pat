@@ -5,27 +5,39 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/la5nta/pat/cfg"
+	"github.com/la5nta/pat/internal/debug"
+
 	"github.com/harenber/ptc-go/v2/pactor"
 	"github.com/la5nta/wl2k-go/transport"
 	"github.com/la5nta/wl2k-go/transport/ardop"
-	"github.com/la5nta/wl2k-go/transport/winmor"
+	"github.com/la5nta/wl2k-go/transport/ax25/agwpe"
+	"github.com/n8jja/Pat-Vara/vara"
 
-	// Register other dialers
+	// Register stateless dialers
 	_ "github.com/la5nta/wl2k-go/transport/ax25"
 	_ "github.com/la5nta/wl2k-go/transport/telnet"
 )
 
 var (
 	dialing *transport.URL // The connect URL currently being dialed (if any)
-	wmTNC   *winmor.TNC    // Pointer to the WINMOR TNC used by Listen and Connect
-	adTNC   *ardop.TNC     // Pointer to the ARDOP TNC used by Listen and Connect
-	pModem  *pactor.Modem
+
+	adTNC       *ardop.TNC     // Pointer to the ARDOP TNC used by Listen and Connect
+	agwpeTNC    *agwpe.TNCPort // Pointer to the AGWPE TNC combined TNC and Port
+	pModem      *pactor.Modem
+	varaHFModem *vara.Modem
+	varaFMModem *vara.Modem
+
+	// Context cancellation function for aborting while dialing.
+	dialCancelFunc func() = func() {}
 )
 
 func hasSSID(str string) bool { return strings.Contains(str, "-") }
@@ -46,21 +58,39 @@ func Connect(connectStr string) (success bool) {
 		return Connect(aliased)
 	}
 
+	// Hack around bug in frontend which may occur if the status updates too quickly.
+	if websocketHub != nil {
+		defer func() { time.Sleep(time.Second); websocketHub.UpdateStatus() }()
+	}
+
+	debug.Printf("connectStr: %s", connectStr)
 	url, err := transport.ParseURL(connectStr)
 	if err != nil {
 		log.Println(err)
 		return false
 	}
 
+	// TODO: Remove after some release cycles (2023-05-21)
+	// Rewrite legacy serial-tnc scheme.
+	if url.Scheme == MethodSerialTNCDeprecated {
+		log.Printf("Transport scheme %s:// is deprecated, use %s:// instead.", MethodSerialTNCDeprecated, MethodAX25SerialTNC)
+		url.Scheme = MethodAX25SerialTNC
+	}
+
+	// Rewrite the generic ax25:// scheme to use a specified AX.25 engine.
+	if url.Scheme == MethodAX25 {
+		url.Scheme = defaultAX25Method()
+	}
+
 	// Init TNCs
 	switch url.Scheme {
-	case MethodArdop:
-		if err := initArdopTNC(); err != nil {
+	case MethodAX25AGWPE:
+		if err := initAGWPE(); err != nil {
 			log.Println(err)
 			return
 		}
-	case MethodWinmor:
-		if err := initWinmorTNC(); err != nil {
+	case MethodArdop:
+		if err := initArdopTNC(); err != nil {
 			log.Println(err)
 			return
 		}
@@ -70,6 +100,16 @@ func Connect(connectStr string) (success bool) {
 			ptCmdInit = strings.Join(val, "\n")
 		}
 		if err := initPactorModem(ptCmdInit); err != nil {
+			log.Println(err)
+			return
+		}
+	case MethodVaraHF:
+		if err := initVaraHFModem(); err != nil {
+			log.Println(err)
+			return
+		}
+	case MethodVaraFM:
+		if err := initVaraFMModem(); err != nil {
 			log.Println(err)
 			return
 		}
@@ -83,9 +123,9 @@ func Connect(connectStr string) (success bool) {
 	// Set default host interface address
 	if url.Host == "" {
 		switch url.Scheme {
-		case MethodAX25:
-			url.Host = config.AX25.Port
-		case MethodSerialTNC:
+		case MethodAX25Linux:
+			url.Host = config.AX25Linux.Port
+		case MethodAX25SerialTNC:
 			url.Host = config.SerialTNC.Path
 			if hbaud := config.SerialTNC.HBaud; hbaud > 0 {
 				url.Params.Set("hbaud", fmt.Sprint(hbaud))
@@ -107,13 +147,11 @@ func Connect(connectStr string) (success bool) {
 			return
 		}
 
-		switch url.Scheme {
-		case MethodAX25, MethodSerialTNC:
+		if strings.HasPrefix(url.Scheme, MethodAX25) {
 			log.Printf("Radio-Only is not available for %s", url.Scheme)
 			return
-		default:
-			url.SetUser(url.User.Username() + "-T")
 		}
+		url.SetUser(url.User.Username() + "-T")
 	}
 
 	// QSY
@@ -136,29 +174,30 @@ func Connect(connectStr string) (success bool) {
 	switch url.Scheme {
 	case MethodArdop:
 		waitBusy(adTNC)
-	case MethodWinmor:
-		waitBusy(wmTNC)
 	}
 
-	// Catch interrupts (signals) while dialing, so users can abort ardop/winmor connects.
-	doneHandleInterrupt := handleInterrupt()
+	ctx, cancel := context.WithCancel(context.Background())
+	dialCancelFunc = func() { dialing = nil; cancel() }
+	defer dialCancelFunc()
 
 	// Signal web gui that we are dialing a connection
 	dialing = url
 	websocketHub.UpdateStatus()
 
 	log.Printf("Connecting to %s (%s)...", url.Target, url.Scheme)
-	conn, err := transport.DialURL(url)
+	conn, err := transport.DialURLContext(ctx, url)
 
 	// Signal web gui that we are no longer dialing
 	dialing = nil
 	websocketHub.UpdateStatus()
 
-	close(doneHandleInterrupt)
-
 	eventLog.LogConn("connect "+connectStr, currFreq, conn, err)
 
-	if err != nil {
+	switch {
+	case errors.Is(err, context.Canceled):
+		log.Printf("Connect cancelled")
+		return
+	case err != nil:
 		log.Printf("Unable to establish connection to remote: %s", err)
 		return
 	}
@@ -210,48 +249,6 @@ func waitBusy(b transport.BusyChannelChecker) {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-}
-
-func initWinmorTNC() error {
-	if wmTNC != nil && wmTNC.Ping() == nil {
-		return nil
-	}
-
-	if wmTNC != nil {
-		wmTNC.Close()
-	}
-
-	var err error
-	wmTNC, err = winmor.Open(config.Winmor.Addr, fOptions.MyCall, config.Locator)
-	if err != nil {
-		return fmt.Errorf("WINMOR TNC initialization failed: %w", err)
-	}
-
-	if config.Winmor.DriveLevel != 0 {
-		if err := wmTNC.SetDriveLevel(config.Winmor.DriveLevel); err != nil {
-			log.Println("Failed to set WINMOR drive level:", err)
-		}
-	}
-
-	if v, err := wmTNC.Version(); err != nil {
-		return fmt.Errorf("WINMOR TNC initialization failed: %s", err)
-	} else {
-		log.Printf("WINMOR TNC v%s initialized", v)
-	}
-
-	transport.RegisterDialer(MethodWinmor, wmTNC)
-
-	if !config.Winmor.PTTControl {
-		return nil
-	}
-
-	rig, ok := rigs[config.Winmor.Rig]
-	if !ok {
-		return fmt.Errorf("unable to set PTT rig '%s': not defined or not loaded", config.Winmor.Rig)
-	}
-	wmTNC.SetPTT(rig)
-
-	return nil
 }
 
 func initArdopTNC() error {
@@ -313,4 +310,104 @@ func initPactorModem(cmdlineinit string) error {
 	transport.RegisterDialer(MethodPactor, pModem)
 
 	return nil
+}
+
+func initVaraHFModem() error {
+	if varaHFModem != nil && varaHFModem.Ping() {
+		return nil
+	}
+	if varaHFModem != nil {
+		varaHFModem.Close()
+	}
+	m, err := initVaraModem(MethodVaraHF, config.VaraHF)
+	if err != nil {
+		return err
+	}
+	if bw := config.VaraHF.Bandwidth; bw != 0 {
+		if err := m.SetBandwidth(fmt.Sprint(bw)); err != nil {
+			m.Close()
+			return err
+		}
+	}
+	varaHFModem = m
+	return nil
+}
+
+func initVaraFMModem() error {
+	if varaFMModem != nil && varaFMModem.Ping() {
+		return nil
+	}
+	if varaFMModem != nil {
+		varaFMModem.Close()
+	}
+	m, err := initVaraModem(MethodVaraFM, config.VaraFM)
+	if err != nil {
+		return err
+	}
+	varaFMModem = m
+	return nil
+}
+
+func initVaraModem(scheme string, conf cfg.VaraConfig) (*vara.Modem, error) {
+	vConf := vara.ModemConfig{
+		Host:     conf.Host(),
+		CmdPort:  conf.CmdPort(),
+		DataPort: conf.DataPort(),
+	}
+	m, err := vara.NewModem(scheme, fOptions.MyCall, vConf)
+	if err != nil {
+		return nil, fmt.Errorf("vara initialization failed: %w", err)
+	}
+	transport.RegisterDialer(scheme, m)
+
+	if conf.PTTControl {
+		rig, ok := rigs[conf.Rig]
+		if !ok {
+			m.Close()
+			return nil, fmt.Errorf("unable to set PTT rig '%s': not defined or not loaded", conf.Rig)
+		}
+		m.SetPTT(rig)
+	}
+	v, _ := m.Version()
+	log.Printf("VARA modem (%s) initialized", v)
+	return m, nil
+}
+
+func initAGWPE() error {
+	if agwpeTNC != nil && agwpeTNC.Ping() == nil {
+		return nil
+	}
+
+	if agwpeTNC != nil {
+		agwpeTNC.Close()
+	}
+
+	var err error
+	agwpeTNC, err = agwpe.OpenPortTCP(config.AGWPE.Addr, config.AGWPE.RadioPort, fOptions.MyCall)
+	if err != nil {
+		return fmt.Errorf("AGWPE TNC initialization failed: %w", err)
+	}
+
+	if v, err := agwpeTNC.Version(); err != nil {
+		return fmt.Errorf("AGWPE TNC initialization failed: %w", err)
+	} else {
+		log.Printf("AGWPE TNC (%s) initialized", v)
+	}
+
+	transport.RegisterContextDialer(MethodAX25AGWPE, agwpeTNC)
+	return nil
+}
+
+// defaultAX25Method resolves the generic ax25:// scheme to a implementation specific scheme.
+func defaultAX25Method() string {
+	switch config.AX25.Engine {
+	case cfg.AX25EngineAGWPE:
+		return MethodAX25AGWPE
+	case cfg.AX25EngineSerialTNC:
+		return MethodAX25SerialTNC
+	case cfg.AX25EngineLinux:
+		return MethodAX25Linux
+	default:
+		panic(fmt.Sprintf("invalid ax25 engine: %s", config.AX25.Engine))
+	}
 }

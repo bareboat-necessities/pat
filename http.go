@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
@@ -26,6 +28,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/la5nta/wl2k-go/transport/ardop"
 
 	"github.com/la5nta/pat/internal/buildinfo"
 	"github.com/la5nta/pat/internal/gpsd"
@@ -36,9 +40,10 @@ import (
 	"github.com/la5nta/wl2k-go/fbb"
 	"github.com/la5nta/wl2k-go/mailbox"
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/n8jja/Pat-Vara/vara"
 )
 
-//go:embed web/res/**
+//go:embed web/dist/**
 var embeddedFS embed.FS
 
 var staticContent fs.FS
@@ -84,7 +89,9 @@ func init() {
 	}
 }
 
-func ListenAndServe(addr string) error {
+func devServerAddr() string { return strings.TrimSuffix(os.Getenv("PAT_WEB_DEV_ADDR"), "/") }
+
+func ListenAndServe(ctx context.Context, addr string) error {
 	log.Printf("Starting HTTP service (http://%s)...", addr)
 
 	if host, _, _ := net.SplitHostPort(addr); host == "" && config.GPSd.EnableHTTP {
@@ -94,6 +101,7 @@ func ListenAndServe(addr string) error {
 	}
 
 	r := mux.NewRouter()
+	r.HandleFunc("/api/bandwidths", bandwidthsHandler).Methods("GET")
 	r.HandleFunc("/api/connect_aliases", connectAliasesHandler).Methods("GET")
 	r.HandleFunc("/api/connect", ConnectHandler)
 	r.HandleFunc("/api/formcatalog", formsMgr.GetFormsCatalogHandler).Methods("GET")
@@ -113,16 +121,46 @@ func ListenAndServe(addr string) error {
 	r.HandleFunc("/api/current_gps_position", positionHandler).Methods("GET")
 	r.HandleFunc("/api/qsy", qsyHandler).Methods("POST")
 	r.HandleFunc("/api/rmslist", rmslistHandler).Methods("GET")
-	r.HandleFunc("/ws", wsHandler)
-	r.HandleFunc("/ui", uiHandler).Methods("GET")
-	r.HandleFunc("/", rootHandler).Methods("GET")
 
-	http.Handle("/", r)
-	http.Handle("/res/", http.FileServer(http.FS(staticContent)))
+	r.PathPrefix("/dist/").Handler(distHandler())
+	r.HandleFunc("/ws", wsHandler)
+	r.HandleFunc("/ui", uiHandler()).Methods("GET")
+	r.HandleFunc("/", rootHandler).Methods("GET")
 
 	websocketHub = NewWSHub()
 
-	return http.ListenAndServe(addr, nil)
+	srv := http.Server{
+		Addr:    addr,
+		Handler: r,
+	}
+	errs := make(chan error, 1)
+	go func() {
+		errs <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Println("Shutting down HTTP server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+		return nil
+	case err := <-errs:
+		return err
+	}
+}
+
+func distHandler() http.Handler {
+	switch target := devServerAddr(); {
+	case target != "":
+		targetURL, err := url.Parse(target)
+		if err != nil {
+			log.Fatalf("invalid proxy target URL: %v", err)
+		}
+		return httputil.NewSingleHostReverseProxy(targetURL)
+	default:
+		return http.FileServer(http.FS(staticContent))
+	}
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {
@@ -246,8 +284,10 @@ func postOutboundMessageHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("forminstance")
 	if err == nil {
 		formData := formsMgr.GetPostedFormData(cookie.Value)
-		name := formsMgr.GetXMLAttachmentNameForForm(formData.TargetForm, formData.IsReply)
-		msg.AddFile(fbb.NewFile(name, []byte(formData.MsgXML)))
+		if xml := formData.MsgXML; xml != "" {
+			name := formsMgr.GetXMLAttachmentNameForForm(formData.TargetForm, formData.IsReply)
+			msg.AddFile(fbb.NewFile(name, []byte(formData.MsgXML)))
+		}
 	}
 
 	// Other fields
@@ -304,7 +344,7 @@ func attachFile(f *multipart.FileHeader, msg *fbb.Message) error {
 	// For some unknown reason, we receive this empty unnamed file when no
 	// attachment is provided. Prior to Go 1.10, this was filtered by
 	// multipart.Reader.
-	if isEmptyFormFile(f) {
+	if f.Size == 0 && f.Filename == "" {
 		return nil
 	}
 
@@ -323,7 +363,7 @@ func attachFile(f *multipart.FileHeader, msg *fbb.Message) error {
 		return HTTPError{err, http.StatusInternalServerError}
 	}
 
-	if isImageMediaType(f.Filename, f.Header.Get("Content-Type")) {
+	if isConvertableImageMediaType(f.Filename, f.Header.Get("Content-Type")) {
 		log.Printf("Auto converting '%s' [%s]...", f.Filename, f.Header.Get("Content-Type"))
 
 		if converted, err := convertImage(p); err != nil {
@@ -355,23 +395,36 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	websocketHub.Handle(conn)
 }
 
-func uiHandler(w http.ResponseWriter, _ *http.Request) {
-	data, err := fs.ReadFile(staticContent, path.Join("res", "tmpl", "index.html"))
-	if err != nil {
-		log.Fatal(err)
+func uiHandler() http.HandlerFunc {
+	const indexPath = "dist/index.html"
+	templateFunc := func() ([]byte, error) { return fs.ReadFile(staticContent, indexPath) }
+	if target := devServerAddr(); target != "" {
+		templateFunc = func() ([]byte, error) {
+			resp, err := http.Get(target + "/" + indexPath)
+			if err != nil {
+				return nil, fmt.Errorf("dev server not reachable: %w", err)
+			}
+			defer resp.Body.Close()
+			return io.ReadAll(resp.Body)
+		}
 	}
 
-	t := template.New("index.html") // create a new template
-	t, err = t.Parse(string(data))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	tmplData := struct{ AppName, Version, Mycall string }{buildinfo.AppName, buildinfo.VersionString(), fOptions.MyCall}
-
-	err = t.Execute(w, tmplData)
-	if err != nil {
-		log.Fatal(err)
+	return func(w http.ResponseWriter, _ *http.Request) {
+		data, err := templateFunc()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		t, err := template.New("index.html").Parse(string(data))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tmplData := struct{ AppName, Version, Mycall string }{buildinfo.AppName, buildinfo.VersionString(), fOptions.MyCall}
+		if err := t.Execute(w, tmplData); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -400,13 +453,38 @@ func statusHandler(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(getStatus())
 }
 
+func bandwidthsHandler(w http.ResponseWriter, req *http.Request) {
+	type BandwidthResponse struct {
+		Mode       string   `json:"mode"`
+		Bandwidths []string `json:"bandwidths"`
+		Default    string   `json:"default,omitempty"`
+	}
+	mode := strings.ToLower(req.FormValue("mode"))
+	resp := BandwidthResponse{Mode: mode, Bandwidths: []string{}}
+	switch {
+	case mode == MethodArdop:
+		for _, bw := range ardop.Bandwidths() {
+			resp.Bandwidths = append(resp.Bandwidths, bw.String())
+		}
+		if bw := config.Ardop.ARQBandwidth; !bw.IsZero() {
+			resp.Default = bw.String()
+		}
+	case mode == MethodVaraHF:
+		resp.Bandwidths = vara.Bandwidths()
+		if bw := config.VaraHF.Bandwidth; bw != 0 {
+			resp.Default = fmt.Sprintf("%d", bw)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func rmslistHandler(w http.ResponseWriter, req *http.Request) {
 	forceDownload, _ := strconv.ParseBool(req.FormValue("force-download"))
 	band := req.FormValue("band")
 	mode := strings.ToLower(req.FormValue("mode"))
 	prefix := strings.ToUpper(req.FormValue("prefix"))
 
-	list, err := ReadRMSList(forceDownload, func(r RMS) bool {
+	list, err := ReadRMSList(req.Context(), forceDownload, func(r RMS) bool {
 		switch {
 		case r.URL == nil:
 			return false

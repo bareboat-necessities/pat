@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -17,24 +18,32 @@ import (
 	"github.com/peterh/liner"
 )
 
-func Interactive() {
+func Interactive(ctx context.Context) {
 	line := liner.NewLiner()
 	defer line.Close()
 
-	for {
-		str, _ := line.Prompt(getPrompt())
-		if str == "" {
-			continue
-		}
-		line.AppendHistory(str)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			str, _ := line.Prompt(getPrompt())
+			if str == "" {
+				continue
+			}
+			line.AppendHistory(str)
 
-		if str[0] == '#' {
-			continue
-		}
+			if str[0] == '#' {
+				continue
+			}
 
-		if quit := execCmd(str); quit {
-			break
+			if quit := execCmd(str); quit {
+				break
+			}
 		}
+	}()
+	select {
+	case <-ctx.Done():
+	case <-done:
 	}
 }
 
@@ -60,7 +69,6 @@ func execCmd(line string) (quit bool) {
 		PrintQTC()
 	case "debug":
 		os.Setenv("ardop_debug", "1")
-		os.Setenv("winmor_debug", "1")
 		fmt.Println("Number of goroutines:", runtime.NumGoroutine())
 	case "q", "quit":
 		return true
@@ -76,11 +84,12 @@ func printInteractiveUsage() {
 	fmt.Println("Uri examples: 'LA3F@5350', 'LA1B-10 v LA5NTA-1', 'LA5NTA:secret@192.168.1.1:54321'")
 
 	methods := []string{
-		MethodWinmor,
 		MethodArdop,
-		MethodAX25,
+		MethodAX25, MethodAX25AGWPE, MethodAX25Linux, MethodAX25SerialTNC,
+		MethodPactor,
 		MethodTelnet,
-		MethodSerialTNC,
+		MethodVaraHF,
+		MethodVaraFM,
 	}
 	fmt.Println("Methods:", strings.Join(methods, ", "))
 
@@ -116,17 +125,6 @@ func PrintHeard() {
 		fmt.Printf("  %-10s (%s)\n", call, t.Format(time.RFC1123))
 	}
 
-	fmt.Println("winmor:")
-	if wmTNC == nil {
-		fmt.Println("  (not initialized)")
-	} else if heard := wmTNC.Heard(); len(heard) == 0 {
-		fmt.Println("  (none)")
-	} else {
-		for call, t := range heard {
-			pf(call, t)
-		}
-	}
-
 	fmt.Println("ardop:")
 	if adTNC == nil {
 		fmt.Println("  (not initialized)")
@@ -138,8 +136,8 @@ func PrintHeard() {
 		}
 	}
 
-	fmt.Println("ax25:")
-	if heard, err := ax25.Heard(config.AX25.Port); err != nil {
+	fmt.Println("ax25+linux:")
+	if heard, err := ax25.Heard(config.AX25Linux.Port); err != nil {
 		fmt.Printf("  (%s)\n", err)
 	} else if len(heard) == 0 {
 		fmt.Println("  (none)")
