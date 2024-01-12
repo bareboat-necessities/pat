@@ -2,11 +2,13 @@
 // Use of this source code is governed by the MIT-license that can be
 // found in the LICENSE file.
 
+//go:build libhamlib
 // +build libhamlib
 
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -24,7 +26,10 @@ func init() {
 	commands = append(commands[:8], append([]Command{cmd}, commands[8:]...)...)
 }
 
-func riglistHandle(args []string) {
+func riglistHandle(ctx context.Context, args []string) {
+	if args[0] == "" {
+		fmt.Println("Missing argument")
+	}
 	term := strings.ToLower(args[0])
 
 	fmt.Print("id\ttransceiver\n")

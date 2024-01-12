@@ -1,7 +1,6 @@
 <a href="http://getpat.io"><img src="https://raw.githubusercontent.com/la5nta/pat-website/gh-pages/img/logo.png" width="128" ></a>
 
-[![Build Status](https://travis-ci.com/la5nta/pat.svg?branch=master)](https://travis-ci.com/la5nta/pat)
-[![Windows Build Status](https://ci.appveyor.com/api/projects/status/tstq4suxfdmudl5l/branch/master?svg=true)](https://ci.appveyor.com/project/martinhpedersen/pat)
+[![Build status](https://github.com/la5nta/pat/actions/workflows/go.yaml/badge.svg)](https://github.com/la5nta/pat/actions)
 [![Go Report Card](https://goreportcard.com/badge/github.com/la5nta/pat)](https://goreportcard.com/report/github.com/la5nta/pat)
 [![Liberapay Patreons](http://img.shields.io/liberapay/patrons/la5nta.svg?logo=liberapay)](https://liberapay.com/la5nta)
 
@@ -17,12 +16,12 @@ It is mainly developed for Linux, but is also known to run on OS X, Windows and 
 * Message composer/reader (basic mailbox functionality).
 * Auto-shrink image attachments.
 * Post position reports with location from local GPS, browser location or manual entry.
-* Rig control (using hamlib) for winmor PTT and QSY.
+* Rig control (using hamlib).
 * CRON-like syntax for execution of scheduled commands (e.g. QSY or connect).
 * Built in http-server with web interface (mobile friendly).
 * Git style command line interface.
 * Listen for P2P connections using multiple modes concurrently.
-* AX.25, telnet, WINMOR and ARDOP support.
+* AX.25, telnet, PACTOR and ARDOP support.
 * Experimental gzip message compression (See "Gzip experiment" below).
 
 ##### Example
@@ -65,6 +64,7 @@ Copyright (c) 2020 Martin Hebnes Pedersen LA5NTA
 
 * DL1THM - Torsten Harenberg
 * HB9GPA - Matthias Renner
+* K0RET - Ryan Turner
 * K0SWE - Chris Keller
 * KD8DRX - Will Davidson
 * KE8HMG - Andrew Huebner
@@ -72,9 +72,10 @@ Copyright (c) 2020 Martin Hebnes Pedersen LA5NTA
 * LA3QMA - Kai Günter Brandt
 * LA4TTA - Erlend Grimseid
 * LA5NTA - Martin Hebnes Pedersen
+* N2YGK - Alan Crosswell
+* VE7GNU - Doug Collinge
 * W6IPA  - JC Martin
 * WY2K - Benjamin Seidenberg
-* VE7GNU - Doug Collinge
 
 ## Thanks to
 
