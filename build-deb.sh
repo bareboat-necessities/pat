@@ -2,7 +2,7 @@
 
 CONTAINER_DISTRO=$1
 
-echo "deb http://deb.debian.org/debian bullseye-backports main" > /etc/apt/sources.list.d/deb-backports.list
+echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/sources.list.d/deb-backports.list
 
 apt-get update  -y -q
 apt-get install -y -q wget xz-utils gnupg ca-certificates
