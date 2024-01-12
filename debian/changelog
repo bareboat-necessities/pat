@@ -1,0 +1,343 @@
+pat (0.15.1) stable; urgency=medium
+
+  * Support config overrides using env variables
+  * Only attach Forms XML if a viewer file is defined
+  * Fix handling of SVG attachments (don't attempt auto resize)
+  * VARA: Silence "got a vara command I wasn't expecting..." messages
+  * VARA: Fix leak when re-initializing the modem connection
+  * hamlib: Fix compatibility with rigctld in VFO Mode
+  * hamlib: Fix tests and compilation when statically linking libhamlib
+  * New experiment FW_AUX_ONLY_EXPERIMENT (disabled by default)
+  * Require Go 1.19 or later (due to updated dependencies)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 5 Nov 2023 12:44:08 +0100
+
+pat (0.15.0) stable; urgency=medium
+
+  * Restore previous connect parameters from browser's local storage
+  * Add missing AX.25 schemes to connect modal's transport dropdown
+  * Fix clearing of To/Cc fields after message is posted to outbox
+  * Fix alignment of connect modal input fields
+  * Improve the dirty disconnect feature
+  * Add deprecation warning for newly deprecated config options
+  * Remove support for previously deprecated config options
+  * AGWPE: Add support for QtSoundModem
+  * AGWPE: Wait for modem ack on dial cancellation
+  * VARA: Add support for inbound (P2P) connections
+  * VARA: Improved throughput, various bug fixes and other improvements
+  * ARDOP: Experimental FSKONLY support (with ARDOP_FSKONLY_EXPERIMENT=1)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 10 Jun 2023 13:07:32 +0200
+
+pat (0.14.1) stable; urgency=medium
+
+  * VARA: Fix panic on 32-bit builds
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Web, 02 May 2023 08:34:42 +0200
+
+pat (0.14.0) stable; urgency=medium
+
+  * AX.25: Implement ability to switch between different AX.25 engines 
+  * AX.25: Add AGWPE support (use Direwolf directly over TCP on all platforms)
+  * Winlink HTML Forms: Various compatibility fixes
+  * VARA: Switch to more idiomatic config fields
+  * VARA: Improved progress report on outbound traffic
+  * VARA: Add support for dial cancellation
+  * VARA: Reject inbound P2P sessions (listener not supported yet)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Web, 19 Apr 2023 21:09:12 +0200
+
+pat (0.13.1) stable; urgency=medium
+
+  * Fix panic when using unregistered VARA instances
+  * Use VARA HF/FM defaults if undefined in config
+  * Fix case sensitive matching when resolving aux addresses' passwords
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 17 Sep 2022 09:05:48 +0200
+
+pat (0.13.0) stable; urgency=medium
+
+  * Add support for VARAHF and VARAFM
+  * Add support for setting the ARDOP ARQ bandwidth when dialing a connection
+  * Include linux/arm64 deb package in releases
+  * Remove support for WINMOR TNCs
+  * Add generic support for dial cancellation
+  * Implement dial cancellation for ax25:// and telnet://
+  * Improved non-interactive CLI compose command
+  * Improved shutdown behavior
+  * Improved FBB protocol compatibility with BPQ Mail
+  * Minor improvements and bug fixes to the PACTOR and serial-tnc transports
+  * Add a build system and package management for the Web GUI
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 20 Aug 2022 21:42:05 +0200
+
+pat (0.12.1) stable; urgency=medium
+
+  * Add support for configurable telnet dial timeout (for Iridium GO users)
+  * Add support for scriptable message composition
+  * Add CLI command `env` for retrieving related environment variables (for scripting)
+  * More reliable Forms updates by using a new API for retrieving latest version and archive URL
+  * Improve websocket handling
+  * Fix bug in Forms update procedure that would delete the OS temp directory in rare cases
+  * Fix bug with pactor serial communication on macOS (Darwin)
+  * Fix bug with Web GUI and Message IDs containing the hash (`#`) symbol
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 11 Dec 2021 15:14:22 +0100
+
+pat (0.12.0) stable; urgency=medium
+
+  * Follow the XDG Base Directory Specification
+  * Add support for sending in precedence order
+  * Add new serial-tnc baudrate configuration options
+  * Fix bug in forms parsing leading to missing forms
+  * Fix permissions issue when updating forms
+  * Fix FBB protocol handshake issue
+  * Improve fsnotify handling for mailbox events
+  * More descriptive error on premature disconnect
+  * Add basic debug logging capabilities
+  * Various dependency updates and refactoring
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 31 Oct 2021 17:28:02 +0100
+
+pat (0.11.0) stable; urgency=medium
+
+  * Add support for Winlink HTML Forms
+  * Add support for individual passords for auxiliary addresses
+  * Add ability to abort ongoing dialing/connection in Web GUI
+  * Add systemd unit file for rigctld
+  * Improve version reporting to Winlink API
+  * Improve websocket handling
+  * Improve visibility of QSY errors in Web GUI
+  * Improve 'reply' and 'forward' functionality in Web GUI
+  * Fix issue with azimuth calculation when distance is zero
+  * Fix incorrect transport URI scheme for packet nodes
+  * Fix build on FreeBSD and macOS.
+  * Avoid truncating rmslist cache on refresh failure
+  * Avoid recompressing images where the resulting file size increases
+  * Require Go 1.16 or later
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Wed, 30 Jun 2021 21:13:40 +0100
+
+pat (0.10.0) stable; urgency=medium
+
+  * Add support for P4 Dragon modems
+  * Add RMS list viewer in Web GUI's connect modal
+  * Add support for additional connect parameters for pactor
+  * New max length of message attachment filenames (255 characters)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Thu, 08 Sep 2020 19:39:40 +0100
+
+pat (0.9.0) stable; urgency=medium
+
+  * Less aggressive websocket timeout
+  * Add column sorting in Web GUI
+  * Require Go 1.10 or later
+  * Fix GPSd config bug introduced in v0.8.0
+  * Fix (mainly macOS) bug related to many open file descriptors
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Wed, 19 Feb 2020 20:13:18 +0100
+
+pat (0.8.0) stable; urgency=medium
+
+  * GPSd support in Web GUI
+  * User configurable Service Code
+  * High Accuracy HTML5 Geolocation
+  * Minor PACTOR enhancements and bug fixes
+  * Fixed ARDOP listener issue
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Thu, 03 Oct 2019 21:48:51 +0200
+
+pat (0.7.0) stable; urgency=medium
+
+  * Support PACTOR PTC-II and PTC-III (https://github.com/la5nta/pat/issues/40)
+  * Fix QSY frequency rounding error (https://github.com/la5nta/pat/issues/147)
+  * Fix panic on ARDOP TNC connection teardown (https://github.com/la5nta/pat/issues/137)
+  * Fix ARDOP compatibility issue (https://github.com/la5nta/pat/issues/139)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Wed, 18 Sep 2019 21:56:17 +0200
+
+pat (0.6.1) stable; urgency=medium
+
+  * Add deb package `dist` as conflicting package (https://github.com/la5nta/pat/issues/131)
+  * Include systemd unit file for ARDOPc (https://github.com/la5nta/pat/issues/130)
+  * Set correct URL parameter for serial-tnc.Baudrate (https://github.com/la5nta/pat/issues/129)
+  * Fix Go 1.10 compatibility issue (https://github.com/la5nta/pat/issues/121)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 21 Apr 2018 11:23:40 +0200
+
+pat (0.6.0) stable; urgency=high
+
+  * Support Winlink's new mixed-case password scheme (https://github.com/la5nta/pat/issues/113)
+  * Support for distance and azumuth in rmslist (https://github.com/la5nta/pat/pull/112)
+  * Improved ARDOP ID-frame parser
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Mon, 22 Jan 2018 21:41:13 +0100
+
+pat (0.5.1) stable; urgency=medium
+
+  * Support ARDOP >= v1.0 (https://github.com/la5nta/pat/issues/108)
+  * Add rmslist support for ARDOP nodes
+  * Switch to the new Winlink rest API (https://github.com/la5nta/pat/issues/110)
+  * Fix bug which caused WINMOR connection failure when dialing the (non-idle) TNC
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Tue, 12 Dec 2017 19:03:04 +0100
+
+pat (0.5.0) stable; urgency=high
+
+  * Fix XSS vulnerability when serving attachments over HTTP (https://github.com/la5nta/pat/issues/105)
+  * Gracefully recover/initialize failed external devices (https://github.com/la5nta/pat/issues/88)
+  * Switch to the new Winlink CMS and API hostname (https://github.com/la5nta/pat/issues/104)
+  * Add config option for WINMOR's Drive Level parameter (https://github.com/la5nta/pat/issues/99)
+  * Add password prompt in web GUI (https://github.com/la5nta/pat/issues/90)
+  * Include man pages in deb and pkg packages (https://github.com/la5nta/pat/pull/91)
+  * Various minor web GUI improvements (https://github.com/la5nta/pat/issues/97)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 18 Nov 2017 11:40:28 +0100
+
+pat (0.4.0) stable; urgency=medium
+
+  * Desktop notifications for web GUI users (https://github.com/la5nta/pat/issues/85)
+  * New status indicator in web GUI for display of various alerts and info (https://github.com/la5nta/pat/issues/86)
+  * Add Cc field to the web GUI composer (https://github.com/la5nta/pat/issues/83)
+  * Tokenize address input in the web GUI composer (https://github.com/la5nta/pat/issues/84)
+  * Check for empty To/Cc on compose (https://github.com/la5nta/pat/issues/89)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Tue, 17 Sep 2017 11:14:59 +0200
+
+pat (0.3.0) stable; urgency=high (Fixes compatibility with an upcoming Winlink CMS release)
+
+  * Fix critical compatibility issues with WL2K-4.0 aka "AWS-CMS" (https://github.com/la5nta/pat/issues/81)
+  * Fix close of AX.25 listener on Linux (https://github.com/la5nta/pat/issues/68)
+  * Add "Delete" and "Move to archive" actions in web GUI (https://github.com/la5nta/pat/issues/63)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Tue, 18 Jul 2017 21:13:08 +0200
+
+pat (0.2.4) stable; urgency=medium
+
+  * Add progress bar for message transfer in web GUI (https://github.com/la5nta/pat/pull/78)
+  * Properly parse offset in B2 compressed message header for BPQ compatibility (https://github.com/la5nta/pat/issues/74)
+  * Fix libax25 segfault on invalid axport (https://github.com/la5nta/pat/issues/73)
+  * Silence FREQUENCY parse errors for ardop (https://github.com/la5nta/pat/issues/75)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Tue, 28 Feb 2017 19:07:00 +0100
+
+pat (0.2.3) stable; urgency=medium
+
+  * Support ARDOP >= v0.9 (https://github.com/la5nta/pat/issues/69)
+  * Improve list parsing in various UI fields
+  * Handle non-ascii attachment names
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Fri, 27 Jan 2016 18:17:30 +0100
+
+pat (0.2.2) stable; urgency=medium
+
+  * Ensure default config is written before opening the configuration editor (https://github.com/la5nta/pat/issues/70)
+  * Add some missing config defaults
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Thu, 01 Dec 2016 18:14:09 +0100
+
+pat (0.2.1) stable; urgency=medium
+
+  * Support ARDOP >= v0.6 (https://github.com/la5nta/pat/issues/60)
+  * Fix bug that caused 'configure' to fail if config format was invalid (https://github.com/la5nta/pat/issues/62)
+  * Add position format examples for --latlon (https://github.com/la5nta/pat/issues/65)
+  * Statically link libax25 (linux) to avoid crash on incompatible shared library (https://github.com/la5nta/pat/issues/59)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Wed, 12 Oct 2016 20:24:18 +0200
+
+pat (0.2.0) stable; urgency=medium
+
+  * Support Radio only - Winlink Hybrid Network (https://github.com/la5nta/pat/issues/44)
+  * Switch to Go port of lzhuf (https://github.com/la5nta/pat/issues/50)
+  * Linux ax25 scripts: Add method for custom TNC initialization (https://github.com/la5nta/pat/issues/53)
+  * Fix ardop PTT rigcontrol (https://github.com/la5nta/pat/issues/58)
+  * Minor bug fixes and improvements in the web GUI
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Fri, 05 Aug 2016 15:16:51 +0200
+
+pat (0.1.5) stable; urgency=medium
+
+  * Fix bug that caused command-line interface composer's prompt scan to see whitespace as end of line (https://github.com/la5nta/pat/issues/45)
+  * Fix Mac OS default install path (https://github.com/la5nta/pat/issues/47)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Mon, 27 Jun 2016 22:43:36 +0200
+
+pat (0.1.4) stable; urgency=medium
+
+  * Fix case where secure_login_password was ignored if mycall was not all upper case (https://github.com/la5nta/pat/issues/42)
+  * Support image resize in cli composer (https://github.com/la5nta/pat/issues/38)
+  * Remove imagemagick dependency for image resize (https://github.com/la5nta/pat/issues/13)
+  * Minor improvement of cli mailbox navigation (https://github.com/la5nta/pat/issues/39)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Thu, 09 Jun 2016 21:02:42 +0200
+
+pat (0.1.3) stable; urgency=medium
+
+  * Add filename extension for mailbox messages (https://github.com/la5nta/pat/issues/34)
+  * Fix broken ax25:// digipeater syntax (https://github.com/la5nta/pat/issues/33)
+  * Enable gzip experiment by default (https://github.com/la5nta/pat/issues/29)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 07 May 2016 22:18:12 +0200
+
+pat (0.1.2) stable; urgency=medium
+
+  * Fix callsign casing bug (https://github.com/la5nta/pat/issues/19)
+  * Fix web composer Re: prefix issues in replies (https://github.com/la5nta/pat/issues/30)
+  * Support running http server while in interactive mode (https://github.com/la5nta/pat/issues/26)
+  * Send smallest messages first (suggested in the Winlink FAQ) (https://github.com/la5nta/pat/issues/25)
+  * Fix handling of proposal code H (https://github.com/la5nta/pat/issues/25)
+  * Fix handling of blocks with all messages deferred/rejected (https://github.com/la5nta/pat/issues/25)
+  * Fix unstable serialization of messages that could result in corrupt partial message transfer (https://github.com/la5nta/pat/issues/25)
+  * Support both utf8 and iso-8859-1 encoded subject header (https://github.com/la5nta/pat/issues/23)
+  * Re-implement ctrl+c for aborting connect/session (https://github.com/la5nta/pat/issues/22)
+  * Fix GUI post button issues on some browsers (https://github.com/la5nta/pat/issues/21)
+  * Fix WINMOR unexpected EOF issue on session termination (https://github.com/la5nta/pat/issues/20)
+  * Fix improper handling of callsign casing (https://github.com/la5nta/pat/issues/19)
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sat, 02 Apr 2016 10:41:16 +0200
+
+pat (0.1.1) stable; urgency=medium
+
+  * Fix various file locking errors on Windows (https://github.com/la5nta/pat/issues/9).
+  * Automatic version reporting to Winlink CMS Web Services.
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Fri, 11 Mar 2016 21:06:16 +0100
+
+pat (0.1.0) stable; urgency=medium
+
+  * Initial release under new name.
+  * Fix leak that caused increasing CPU load.
+  * Add band filtering for rmslist command.
+  * Fix winmor robust issues.
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 06 Mar 2016 14:09:11 +0100
+
+wl2k-go (0.0.4) stable; urgency=medium
+
+  * Fixed parse error of Date field from RMS Relay'ed messages (https://github.com/la5nta/wl2k-go/issues/29).
+  * Fixed parse of ax25 URLs with digipeaters (https://github.com/la5nta/wl2k-go/issues/28).
+  * Fixed panic on misconfigured (empty) axport (https://github.com/la5nta/wl2k-go/issues/27).
+  * Prompt user for login password if mycall is overridden by --mycall even though a password is defined in config.
+  * Run winmor in robust mode during handshake and proposal chatter.
+  * GPSd support (for position reporting using a local serial/usb GPS).
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 14 Feb 2016 18:19:02 +0100
+
+wl2k-go (0.0.3) stable; urgency=medium
+
+  * Fixed web ui assets bug (https://github.com/la5nta/wl2k-go/issues/26).
+  * Fixed systemd user install script.
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Thu, 14 Jan 2016 19:26:49 +0100
+
+wl2k-go (0.0.2) stable; urgency=medium
+
+  * Fixed ARDOPc issues.
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 10 Jan 2016 15:56:00 +0100
+
+wl2k-go (0.0.1) stable; urgency=medium
+
+  * Initial release.
+
+ -- Martin Hebnes Pedersen <martin.h.pedersen@gmail.com>  Sun, 04 Nov 2016 16:24:24 +0100
