@@ -8,10 +8,10 @@ apt-get update  -y -q
 apt-get install -y -q wget xz-utils gnupg ca-certificates
 apt-get upgrade -y -q
 
-apt-get -y install devscripts/bullseye-backports debhelper-compat \
+apt-get -y install devscripts/bookworm-backports debhelper-compat \
   build-essential lintian \
-  golang/bullseye-backports golang-go/bullseye-backports \
-  golang-doc/bullseye-backports golang-src/bullseye-backports libax25 libax25-dev
+  golang/bookworm-backports golang-go/bookworm-backports \
+  golang-doc/bookworm-backports golang-src/bookworm-backports libax25 libax25-dev
 
 ./make.bash libax25
 
