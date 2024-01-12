@@ -6,13 +6,11 @@ executors:
   boot-linux:
     machine:
       resource_class: large
-      enabled: true
-      image: ubuntu-2004:202104-01
+      image: ubuntu-2204:2023.10.1
   boot-linux-arm:
     machine:
       resource_class: arm.large
-      enabled: true
-      image: ubuntu-2004:202104-01
+      image: ubuntu-2204:2023.10.1
 commands:
   git-checkout:
     steps:
@@ -33,32 +31,22 @@ commands:
       - git-checkout
       - build-n-publish-debian
 jobs:
-  build-debian-bullseye-arm64:
+  build-debian-bookworm-arm64:
     executor: boot-linux-arm
     environment:
-      - DOCKER_IMAGE=arm64v8/debian:bullseye
-      - CONTAINER_DISTRO=debian:bullseye
-      - PKG_RELEASE=bullseye
+      - DOCKER_IMAGE=arm64v8/debian:bookworm
+      - CONTAINER_DISTRO=debian:bookworm
+      - PKG_RELEASE=bookworm
       - PKG_DISTRO=debian
       - EMU=off
     steps:
       - do-all
-  build-debian-bullseye-arm32:
-    executor: boot-linux-arm
-    environment:
-      - DOCKER_IMAGE=arm32v7/debian:bullseye
-      - CONTAINER_DISTRO=debian:bullseye
-      - PKG_RELEASE=bullseye
-      - PKG_DISTRO=debian
-      - EMU=off
-    steps:
-      - do-all
-  build-debian-bullseye-amd64:
+  build-debian-bookworm-amd64:
     executor: boot-linux
     environment:
-      - DOCKER_IMAGE=amd64/debian:bullseye
-      - CONTAINER_DISTRO=debian:bullseye
-      - PKG_RELEASE=bullseye
+      - DOCKER_IMAGE=amd64/debian:bookworm
+      - CONTAINER_DISTRO=debian:bookworm
+      - PKG_RELEASE=bookworm
       - PKG_DISTRO=debian
     steps:
       - do-all
@@ -66,6 +54,5 @@ workflows:
   version: 2
   build_all:
     jobs:
-      - build-debian-bullseye-arm64
-      - build-debian-bullseye-arm32
-      - build-debian-bullseye-amd64
+      - build-debian-bookworm-arm64
+      - build-debian-bookworm-amd64
