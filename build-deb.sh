@@ -8,7 +8,7 @@ apt-get update  -y -q
 apt-get install -y -q wget xz-utils gnupg ca-certificates
 apt-get upgrade -y -q
 
-apt-get -y install devscripts/bookworm-backports debhelper-compat \
+apt-get -y install devscripts debhelper-compat \
   build-essential lintian \
   golang/bookworm-backports golang-go/bookworm-backports \
   golang-doc/bookworm-backports golang-src/bookworm-backports libax25 libax25-dev
